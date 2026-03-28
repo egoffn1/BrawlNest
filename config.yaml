@@ -1,0 +1,34 @@
+app:
+  name: "Brawl Stats Bot"
+  version: "2.0.0"
+  log_level: "INFO"
+  log_file: "logs/app.log"
+  db_path: "brawl_stats.db"
+  search_mode: "offline"          # "offline" или "online"
+
+api:
+  base_url: "https://api.brawlstars.com/v1"
+  rate_limit_per_key: 30
+  request_timeout: 10
+  cache_ttl: 300
+
+search:
+  workers_per_key: 10
+  default_requests: 1000
+  output_file: "The_players.txt"
+  clubs_output_file: "existing_clubs.txt"
+  tag_min_length: 7
+  tag_max_length: 9
+
+bot:
+  free_daily_requests: 10
+  premium_price_stars: 100
+
+api_server:
+  host: "0.0.0.0"
+  port: 8000
+
+sync:
+  auto_pull_on_start: true
+  auto_push_on_exit: true
+  push_after_fill: true

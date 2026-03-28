@@ -1,0 +1,27 @@
+version: "3.9"
+
+services:
+  bot:
+    build: .
+    container_name: brawl_bot
+    command: python main.py bot
+    env_file: .env
+    volumes:
+      - ./brawl_stats.db:/app/brawl_stats.db
+      - ./logs:/app/logs
+      - ./The_players.txt:/app/The_players.txt
+    restart: unless-stopped
+
+  api:
+    build: .
+    container_name: brawl_api
+    command: python main.py api
+    env_file: .env
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./brawl_stats.db:/app/brawl_stats.db
+      - ./logs:/app/logs
+    restart: unless-stopped
+    depends_on:
+      - bot
