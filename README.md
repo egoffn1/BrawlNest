@@ -3,7 +3,7 @@
 -->
 
 <div align="center">
-  <h1>🎮 BrawlNest v2</h1>
+  <h1>🎮 BrawlNest</h1>
   <p><strong>Универсальный инструмент для анализа Brawl Stars</strong><br/>
   CLI, Telegram‑бот, REST API, синхронизация с GitHub, непрерывный сбор данных, система рейтинга, распределённый кэш и расширенная статистика</p>
   <p>
