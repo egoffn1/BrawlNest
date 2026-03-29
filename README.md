@@ -1,9 +1,9 @@
 <!--
-  Brawl Stats Bot — обновлённый README.md с системой рейтинга, расширенным API, PostgreSQL/Redis и новыми эндпоинтами
+  BrawlNest — обновлённый README.md с системой рейтинга, расширенным API, PostgreSQL/Redis и новыми эндпоинтами
 -->
 
 <div align="center">
-  <h1>🎮 Brawl Stats Bot v2</h1>
+  <h1>🎮 BrawlNest v2</h1>
   <p><strong>Универсальный инструмент для анализа Brawl Stars</strong><br/>
   CLI, Telegram‑бот, REST API, синхронизация с GitHub, непрерывный сбор данных, система рейтинга, распределённый кэш и расширенная статистика</p>
   <p>
@@ -25,7 +25,7 @@
   </p>
   <p>
     📦 Все данные (игроки, клубы, история) хранятся в отдельной ветке  
-    <strong><a href="https://github.com/egoffn1/BrawlStatsBot/tree/brawl_data/brawl_data">brawl_data</a></strong>
+    <strong><a href="https://github.com/egoffn1/BrawlNest/tree/brawl_data/brawl_data">brawl_data</a></strong>
   </p>
 </div>
 
@@ -52,21 +52,21 @@
 ### 1. Установка
 
 ```bash
-git clone https://github.com/egoffn1/BrawlStatsBot.git
-cd BrawlStatsBot
+git clone [https://github.com/egoffn1/BrawlNest.git](https://github.com/egoffn1/BrawlNest.git)
+cd BrawlNest
 python -m venv venv
 source venv/bin/activate   # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 cp .env.example .env
-```
+````
 
-### 2. Настройка `.env`
+### 2\. Настройка `.env`
 
 Заполните основные переменные (ключи Brawl Stars не обязательны, без них работают функции, использующие GitHub-базу):
 
 ```ini
 # GitHub
-GITHUB_REPO=egoffn1/BrawlStatsBot
+GITHUB_REPO=egoffn1/BrawlNest
 GITHUB_BRANCH=main
 GITHUB_TOKEN=ваш_токен_github
 
@@ -76,7 +76,7 @@ DEFAULT_DAILY_LIMIT=10000
 API_PORT=80
 
 # PostgreSQL (обязательно)
-POSTGRES_DSN=postgresql://user:pass@localhost:5432/brawlstats
+POSTGRES_DSN=postgresql://user:pass@localhost:5432/brawlnest
 
 # Redis (обязательно)
 REDIS_URL=redis://localhost:6379
@@ -92,7 +92,7 @@ MAP_STATS_REFRESH_INTERVAL_H=1
 NAME_INDEX_REFRESH_INTERVAL_H=2
 ```
 
-### 3. Запуск
+### 3\. Запуск
 
 | Команда | Режим |
 |---------|-------|
@@ -103,7 +103,7 @@ NAME_INDEX_REFRESH_INTERVAL_H=2
 
 API доступен по адресу `http://130.12.46.224`. Swagger UI: `/docs`.
 
----
+-----
 
 ## 🔑 Использование API
 
@@ -112,7 +112,7 @@ API доступен по адресу `http://130.12.46.224`. Swagger UI: `/doc
 ### Получение ключа (публично)
 
 ```bash
-curl -X POST http://130.12.46.224/generate_key \
+curl -X POST [http://130.12.46.224/generate_key](http://130.12.46.224/generate_key) \
   -H "Content-Type: application/json" \
   -d '{"name": "My App"}'
 ```
@@ -131,7 +131,7 @@ curl -X POST http://130.12.46.224/generate_key \
 ### Проверка статуса ключа
 
 ```bash
-curl -H "X-API-Key: ваш_ключ" http://130.12.46.224/my_status
+curl -H "X-API-Key: ваш_ключ" [http://130.12.46.224/my_status](http://130.12.46.224/my_status)
 ```
 
 Пример ответа:
@@ -151,36 +151,36 @@ curl -H "X-API-Key: ваш_ключ" http://130.12.46.224/my_status
 
 ```bash
 # Список игроков (первые 10)
-curl -H "X-API-Key: ваш_ключ" "http://130.12.46.224/players?limit=10"
+curl -H "X-API-Key: ваш_ключ" "[http://130.12.46.224/players?limit=10](http://130.12.46.224/players?limit=10)"
 
 # Данные игрока по тегу (без #)
-curl -H "X-API-Key: ваш_ключ" "http://130.12.46.224/player/8UG9C0L"
+curl -H "X-API-Key: ваш_ключ" "[http://130.12.46.224/player/8UG9C0L](http://130.12.46.224/player/8UG9C0L)"
 
 # История трофеев игрока
-curl -H "X-API-Key: ваш_ключ" "http://130.12.46.224/player/8UG9C0L/history?days=7"
+curl -H "X-API-Key: ваш_ключ" "[http://130.12.46.224/player/8UG9C0L/history?days=7](http://130.12.46.224/player/8UG9C0L/history?days=7)"
 
 # Статистика бойцов игрока
-curl -H "X-API-Key: ваш_ключ" "http://130.12.46.224/player/8UG9C0L/brawlers"
+curl -H "X-API-Key: ваш_ключ" "[http://130.12.46.224/player/8UG9C0L/brawlers](http://130.12.46.224/player/8UG9C0L/brawlers)"
 
 # Поиск игроков по имени (быстрый индекс Redis)
-curl -H "X-API-Key: ваш_ключ" "http://130.12.46.224/search/players?name=Carlos"
+curl -H "X-API-Key: ваш_ключ" "[http://130.12.46.224/search/players?name=Carlos](http://130.12.46.224/search/players?name=Carlos)"
 
 # Рейтинг игроков (топ)
-curl -H "X-API-Key: ваш_ключ" "http://130.12.46.224/rankings/players?limit=10"
+curl -H "X-API-Key: ваш_ключ" "[http://130.12.46.224/rankings/players?limit=10](http://130.12.46.224/rankings/players?limit=10)"
 
 # Статистика по картам
-curl -H "X-API-Key: ваш_ключ" "http://130.12.46.224/maps?limit=10"
+curl -H "X-API-Key: ваш_ключ" "[http://130.12.46.224/maps?limit=10](http://130.12.46.224/maps?limit=10)"
 ```
 
 ### Использование в браузере (Swagger UI)
 
 Откройте `http://130.12.46.224/docs`, нажмите **Authorize**, вставьте ключ и пользуйтесь интерактивной документацией.
 
----
+-----
 
 ## 📚 Документация API
 
-Полная документация API доступна в отдельном файле [API.md](API.md) и по адресу `http://130.12.46.224/docs`.
+Полная документация API BrawlNest доступна в отдельном файле [API.md](API.md) и по адресу `http://130.12.46.224/docs`.
 
 Основные эндпоинты (v2):
 
@@ -213,11 +213,11 @@ curl -H "X-API-Key: ваш_ключ" "http://130.12.46.224/maps?limit=10"
 > 🗄️ **Базы данных:** PostgreSQL хранит историю, бои, рейтинги; Redis кэширует списки и индексы.  
 > 🌐 **Распределённая сеть:** несколько узлов API могут обмениваться данными через внутренние эндпоинты, увеличивая отказоустойчивость.
 
----
+-----
 
 ## ⭐ Система рейтинга
 
-Рейтинг мотивирует пользователей вносить вклад в базу данных.  
+Рейтинг BrawlNest мотивирует пользователей вносить вклад в базу данных.  
 Очки начисляются **только через сервер**, локальная подделка невозможна.
 
 ### Начисление очков
@@ -233,32 +233,27 @@ curl -H "X-API-Key: ваш_ключ" "http://130.12.46.224/maps?limit=10"
 | Обнаружение командной игры | 10 | 5 мин |
 | Поиск существующих игроков | 2 | 5 мин |
 | Заполнение БД (однократно) | 20 | 1 раз в день |
-| Непрерывное заполнение (за каждого игрока) | 20 | 5 мин на игрока |
+| Непрерывное заполнениe (за игрока) | 20 | 5 мин на игрока |
 | Генерация кодов | 2 | 5 мин |
 | Синхронизация с GitHub | 5 | 5 мин |
 
-### Как посмотреть рейтинг
-
-- **CLI**: выберите пункт меню **⭐ Мой рейтинг**.
-- **API**: `GET /rating/my?api_key=ваш_ключ`.
-
----
+-----
 
 ## 🐙 Интеграция с GitHub
 
-Данные автоматически синхронизируются с репозиторием GitHub в папке `brawl_data/`.  
+Данные BrawlNest автоматически синхронизируются с репозиторием GitHub в папке `brawl_data/`.  
 Это позволяет:
 
-- Совместно использовать базу данных между несколькими экземплярами приложения.
-- Резервное копирование.
-- Удобный экспорт в JSON.
+  - Совместно использовать базу данных между несколькими экземплярами приложения.
+  - Резервное копирование.
+  - Удобный экспорт в JSON.
 
 ### Настройка
 
 В `.env` укажите `GITHUB_REPO`, `GITHUB_BRANCH`, `GITHUB_TOKEN`.  
 В `config.yaml` можно настроить автосинхронизацию (опционально).
 
----
+-----
 
 ## 🚀 Установка на сервер
 
@@ -273,7 +268,7 @@ services:
     environment:
       POSTGRES_USER: user
       POSTGRES_PASSWORD: pass
-      POSTGRES_DB: brawlstats
+      POSTGRES_DB: brawlnest
     volumes:
       - postgres_data:/var/lib/postgresql/data
   redis:
@@ -286,7 +281,7 @@ services:
       - postgres
       - redis
     environment:
-      POSTGRES_DSN: postgresql://user:pass@postgres:5432/brawlstats
+      POSTGRES_DSN: postgresql://user:pass@postgres:5432/brawlnest
       REDIS_URL: redis://redis:6379
 ```
 
@@ -298,22 +293,23 @@ docker-compose up -d
 
 Подробная инструкция по ручной установке на Ubuntu описана в [DEPLOY.md](DEPLOY.md).
 
----
+-----
 
 ## 🤝 Вклад в проект
 
-Мы приветствуем любые улучшения! Если вы хотите внести свой вклад:
+Мы приветствуем любые улучшения BrawlNest\! Если вы хотите внести свой вклад:
 
-1. Форкните репозиторий.
-2. Создайте ветку для вашей фичи (`git checkout -b feature/amazing`).
-3. Сделайте коммит (`git commit -m 'Add amazing feature'`).
-4. Отправьте изменения (`git push origin feature/amazing`).
-5. Откройте Pull Request.
-6. Обычный донат тоже очень сильно поможет развитию.
+1.  Форкните репозиторий.
+2.  Создайте ветку для вашей фичи (`git checkout -b feature/amazing`).
+3.  Сделайте коммит (`git commit -m 'Add amazing feature'`).
+4.  Отправьте изменения (`git push origin feature/amazing`).
+5.  Откройте Pull Request.
 
----
+-----
 
-<div align="center">
-  <sub>Сделано с ❤️ для сообщества Brawl Stars</sub>
-</div>
+\<div align="center"\>
+\<sub\>Сделано с ❤️ для сообщества Brawl Stars в рамках BrawlNest\</sub\>
+\</div\>
+
+```
 ```
