@@ -14,6 +14,7 @@ brawl_data/
 ├── player_brawler_stats/  # Статистика бойцов по игрокам
 ├── team_stats/            # Командная статистика
 ├── rankings/              # Ежедневные рейтинги
+├── team_codes/            # Активные коды команд
 └── map_stats.json         # Агрегированная статистика карт
 ```
 
@@ -99,6 +100,18 @@ brawl_data/
 ### `rankings/clubs/{date}.json`
 Аналогично с полями `tag`, `name`, `trophies`.
 
+### `team_codes/{code}.json`
+```json
+{
+  "code": "XSJ2Z4T",
+  "created_at": "2025-04-01T12:34:56Z",
+  "expires_at": "2025-04-01T12:36:56Z",
+  "creator_api_key": "wRs7Bm_N...",
+  "duration_seconds": 120
+}
+```
+Коды команд генерируются API и автоматически удаляются после истечения срока действия.
+
 ### `map_stats.json`
 ```json
 [
@@ -120,6 +133,6 @@ brawl_data/
 ---
 
 **Связанные репозитории:**  
-- Код API: [ветка main](https://github.com/egoffn1/BrawlStatsBot/tree/main)  
+- Основной проэкт: [ветка main](https://github.com/egoffn1/BrawlStatsBot/tree/main)  
 - Данные: [ветка brawl_data](https://github.com/egoffn1/BrawlStatsBot/tree/brawl_data)
 ```
