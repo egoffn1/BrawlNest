@@ -13,6 +13,7 @@ import threading
 import random
 import aiohttp
 import shutil
+import importlib
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 from math import ceil
@@ -192,8 +193,27 @@ async def _nest_delete(path: str) -> bool:
 # Инициализация
 # ═══════════════════════════════════════════════════════════════════
 
+def create_default_env():
+    """Создаёт файл .env с настройками по умолчанию, если он отсутствует."""
+    env_path = os.path.join(os.path.dirname(__file__), ".env")
+    if not os.path.exists(env_path):
+        with open(env_path, "w", encoding="utf-8") as f:
+            f.write("""# BrawlNest CLI configuration
+API_KEY=
+BRAWLNEST_API_KEY=
+API_SERVER_URL=http://130.12.46.224
+API_KEYS=
+GITHUB_REPO_URL=https://github.com/egoffn1/BrawlNest
+GITHUB_TOKEN=
+""")
+        _info("Создан файл .env с настройками по умолчанию")
+
+
 async def _init():
     global db, api, player_col, club_col, HAS_BRAWL_KEYS
+    # Создаём .env если отсутствует
+    create_default_env()
+    
     db = Database()
     try:
         await db.connect()
@@ -249,39 +269,62 @@ async def _ask_int(prompt: str, default: int) -> int:
 # ═══════════════════════════════════════════════════════════════════
 
 def _save_env_key(key: str):
+    """Сохраняет API-ключ в .env и обновляет глобальную переменную."""
     global API_KEY
     env_path = os.path.join(os.path.dirname(__file__), ".env")
-    content = ""
+    # Читаем существующий файл, если есть
+    lines = []
     if os.path.exists(env_path):
         with open(env_path) as f:
-            content = f.read()
-    lines = [l for l in content.splitlines() if not l.startswith("API_KEY=")]
-    lines.append(f"API_KEY={key}")
+            lines = f.readlines()
+    # Ищем строку с API_KEY или BRAWLNEST_API_KEY
+    key_found = False
+    for i, line in enumerate(lines):
+        if line.startswith("API_KEY=") or line.startswith("BRAWLNEST_API_KEY="):
+            lines[i] = f"API_KEY={key}\n"
+            key_found = True
+            break
+    if not key_found:
+        lines.append(f"API_KEY={key}\n")
+    # Сохраняем
     with open(env_path, "w") as f:
-        f.write("\n".join(lines) + "\n")
+        f.writelines(lines)
+    # Обновляем глобальную переменную
     API_KEY = key
+    # Перезагружаем переменные окружения (для config)
+    from dotenv import load_dotenv
+    load_dotenv(override=True)
+    # Перезагружаем модуль config чтобы он подхватил новый ключ
+    try:
+        import config
+        importlib.reload(config)
+    except Exception:
+        pass
 
 
 async def ensure_api_key():
+    """Автоматическая проверка и генерация API-ключа при необходимости."""
     global API_KEY
+    
+    # Если ключ уже есть – проверяем его валидность
     if API_KEY:
-        # validate
         try:
             async with aiohttp.ClientSession() as sess:
-                async with sess.get(f"{BASE_URL}/ping",
-                                    timeout=aiohttp.ClientTimeout(total=5)) as r:
-                    if r.status == 200:
-                        # Try validate key
-                        async with sess.get(
-                            f"{BASE_URL}/my_status",
-                            params={"api_key": API_KEY},
-                            timeout=aiohttp.ClientTimeout(total=5)
-                        ) as r2:
-                            if r2.status == 200:
-                                return
+                async with sess.get(
+                    f"{BASE_URL}/my_status",
+                    params={"api_key": API_KEY},
+                    timeout=aiohttp.ClientTimeout(total=5)
+                ) as resp:
+                    if resp.status == 200:
+                        return  # ключ рабочий
         except Exception:
             pass
+        # ключ невалидный – продолжаем как при отсутствии
+        console.print()
+        _info("API ключ устарел, генерируем новый...")
+        API_KEY = ""  # сбросим, чтобы перегенерировать
 
+    # Если ключа нет – пытаемся сгенерировать
     console.print()
     _info(f"Подключение к BrawlNest API: {BASE_URL}")
     try:
@@ -302,6 +345,7 @@ async def ensure_api_key():
     except Exception as e:
         _err(f"Не удалось подключиться к {BASE_URL}: {e}")
 
+    # Если генерация не удалась, предлагаем ввести вручную
     console.print()
     choice = await _ask("Введите API-ключ вручную (или Enter чтобы пропустить)", "")
     if choice:
@@ -2367,6 +2411,9 @@ async def interactive_menu():
 
 async def main():
     await _init()
+    # Автоматическая настройка API-ключа перед началом работы
+    await ensure_api_key()
+    
     if SYNC_CFG.get("auto_pull_on_start", False):
         try:
             await sync_pull()
@@ -2376,7 +2423,6 @@ async def main():
     if len(sys.argv) > 1:
         cmd = sys.argv[1].lower()
         tag = sys.argv[2] if len(sys.argv) > 2 else ""
-        await ensure_api_key()
         if cmd == "player" and tag:        await show_player(tag, True)
         elif cmd == "battles" and tag:     await show_player_battles(tag)
         elif cmd == "history" and tag:     await show_player_history(tag)
