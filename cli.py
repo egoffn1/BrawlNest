@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Brawl Stats CLI — интерфейс для анализа Brawl Stars.
-Навигация: ↑↓ / Tab / Shift+Tab → выбор, Enter → подтверждение, q → выход
+BrawlNest CLI — полный интерфейс (modern TUI).
+Переработанный интерфейс меню: адаптивная сетка, равные колонки, навигация стрелками,
+Tab/Shift+Tab циклически, сохранение позиции курсора, аккуратный header/footer.
 """
 import sys
 import asyncio
@@ -11,277 +12,10 @@ import time
 import threading
 import random
 import aiohttp
-from datetime import datetime, timedelta
-from typing import Optional, List, Dict, Any, Union
-from urllib.parse import quote
-
-from rich.console import Console
-from rich.table import Table
-from rich import box
-from rich.rule import Rule
-from rich.panel import Panel
-from rich.text import Text
-from rich.progress import Progress, BarColumn, TextColumn, TimeElapsedColumn
-
-from prompt_toolkit import Application as PTApp
-from prompt_toolkit.key_binding import KeyBindings
-from prompt_toolkit.layout import Layout, HSplit, Window
-from prompt_toolkit.layout.controls import FormattedTextControl
-from prompt_toolkit.formatted_text import HTML
-from prompt_toolkit.styles import Style as PTStyle
-
-from config import API_KEYS, SEARCH_CFG, APP_CFG, SYNC_CFG, GITHUB_REPO_URL, GITHUB_TOKEN
-from database import Database
-from api_client import BrawlAPIClient
-from collectors.player_collector import PlayerCollector
-from collectors.club_collector import ClubCollector
-from utils.logger import setup_logger
-from utils.tag_generator import generate_tags
-from sync_github import GitHubSync
-
-# Проверка наличия библиотек для PNG
-PNG_AVAILABLE = False
-try:
-    import matplotlib
-    matplotlib.use('Agg')
-    import matplotlib.pyplot as plt
-    from PIL import Image
-    import io
-    PNG_AVAILABLE = True
-except ImportError:
-    pass
-
-# ── консоль ──────────────────────────────────────────────────────────────────
-console = Console(highlight=False)
-logger = setup_logger()
-
-# ── стиль ────────────────────────────────────────────────────────────────────
-PT_STYLE = PTStyle.from_dict({
-    "cursor":   "bold #f97316",
-    "selected": "bold #ffffff",
-    "item":     "#d1d5db",
-    "dim":      "#4b5563",
-    "prompt":   "bold #f97316",
-    "text":     "#ffffff",
-})
-
-# ── названия режимов ────────────────────────────────────────────────────────
-MODE_NAMES = {
-    "soloShowdown": "🌵 Столкновение (соло)",
-    "duoShowdown":  "👥 Столкновение (дуо)",
-    "brawlBall":    "⚽ Броулбол",
-    "knockout":     "🥊 Нокаут",
-    "heist":        "💰 Ограбление",
-    "hotZone":      "🔥 Горячая зона",
-    "bounty":       "🏆 Охота",
-    "gemGrab":      "💎 Захват кристаллов",
-    "duels":        "⚔️ Дуэли",
-    "wipeout":      "🧹 Зачистка",
-    "basketBrawl":  "🏀 Баскетбой",
-    "roboRumble":   "🤖 Вторжение роботов",
-    "bossFight":    "👾 Битва с боссом",
-    "bigGame":      "🐘 Большая игра",
-    "siege":        "🏰 Осада",
-    "trioShowdown": "👥 Столкновение (трио)",
-    "wipeout5V5":   "🧹 Зачистка 5x5",
-    "knockout5V5":  "🥊 Нокаут 5x5",
-    "ranked":       "🏆 Ранговый режим",
-    "special":      "✨ Особое событие",
-    "unknown":      "❓ Неизвестный режим",
-}
-
-MAP_TRANSLATIONS = {
-    "Hard Rock Mine": "Хард-рок шахта",
-    "Mushroom Meadow": "Грибная лощина",
-    "Minecart Madness": "Вагонетка без тормозов",
-    "Deathcap Trap": "Смертельная ловушка",
-    "Double Swoosh": "Двойной изгиб",
-    "Angled Mountain": "Угловатая гора",
-    "Crystal Cavern": "Кристальная пещера",
-    "Deep Hollows": "Подземные пустоты",
-    "Triple Dribble": "Трипл-дриблинг",
-    "Center Stage": "Центровая площадка",
-    "Super Beach": "Суперпляж",
-    "Sunny Soccer": "Солнечный футбол",
-    "Pinhole Punt": "Щелевой удар",
-    "Snake Prairie": "Змеиные поля",
-    "Goalkeeper's Dream": "Мечта вратаря",
-    "Pinball Dreams": "Пинбол мечты",
-    "Feast or Famine": "Всё или ничего",
-    "Cavern Churn": "Штольня",
-    "Double Trouble": "Двойные озера",
-    "Death Landscapes": "Озеро мертвецов",
-    "Two Thousand Lakes": "Две тысячи озёр",
-    "Acid Lakes": "Кислотные озёра",
-    "Woodland Lilies": "Лесные лилии",
-    "Lotus": "Лотос",
-    "Starfruit Supernova": "Звёздная сверхновая",
-    "Out in the Open": "В чистом поле",
-    "Goldarm Gulch": "Ущелье Золотого Дракона",
-    "Belle's Rock": "Скала Белль",
-    "New Horizon": "Новый горизонт",
-    "Beautiful Garden": "Прекрасный сад",
-    "Flaring Phoenix": "Пылающий феникс",
-    "Hot Potato": "Горячая кукуруза",
-    "Safe Zone": "Керки в кустах",
-    "Bridge Too Far": "Поворот на мосту",
-    "GG Mortuary": "Морг Мортиса",
-    "Bridge Spam": "Взятие моста",
-    "Quintillion": "Квинтиллион",
-    "Ring of Fire": "Огненное кольцо",
-    "Parallel Plays": "Параллельная игра",
-    "Open Zone": "Открытая зона",
-    "Dueling Beetles": "Дуэльные жуки",
-    "Layer Cake": "Кремовый торт",
-    "Snake Prairie": "Змеиные степи",
-    "Grand Canal": "Гранд-канал",
-    "Shooting Star": "Падающая звезда",
-    "Storage Sector": "Складской сектор",
-    "Hoop Boot Hill": "Баскетбольный холм",
-    "Jumpscare Lair": "Логово страха",
-    "Hideout": "Убежище",
-    "H is for Holiday": "H как праздник",
-    "Mirage Arena": "Арена миражей",
-    "Icy ice park": "Ледяной парк",
-    "Hello Always Ends With a Goodbye": "Привет всегда заканчивается прощанием",
-    "Crescendo": "Крещендо",
-}
-
-# ── глобальные объекты ───────────────────────────────────────────────────────
-db: Database
-api: BrawlAPIClient
-player_col: PlayerCollector
-club_col: ClubCollector
-search_mode = "offline"
-SEARCH_MODE_FILE = "search_mode.txt"
-HAS_API_KEYS = True
-API_SERVER_URL = os.getenv("API_SERVER_URL", "http://130.12.46.224:8080")
-API_KEY = os.getenv("API_KEY", "")
-
-def load_search_mode():
-    global search_mode
-    try:
-        if os.path.exists(SEARCH_MODE_FILE):
-            with open(SEARCH_MODE_FILE, "r") as f:
-                mode = f.read().strip().lower()
-                if mode in ("offline", "online"):
-                    search_mode = mode
-                    return
-    except:
-        pass
-    search_mode = APP_CFG.get("search_mode", "offline")
-
-def save_search_mode(mode: str):
-    global search_mode
-    search_mode = mode
-    try:
-        with open(SEARCH_MODE_FILE, "w") as f:
-            f.write(mode)
-    except:
-        pass
-
-# ═════════════════════════════════════════════════════════════════════════════
-# GitHub API для поиска по репозиторию (упрощённо)
-# ═════════════════════════════════════════════════════════════════════════════
-
-async def get_github_files_list(repo_path: str) -> List[Dict]:
-    repo_url = GITHUB_REPO_URL.rstrip(".git")
-    parts = repo_url.split("/")
-    owner = parts[-2]
-    repo = parts[-1]
-    api_url = f"https://api.github.com/repos/{owner}/{repo}/contents/{repo_path}"
-    headers = {}
-    if GITHUB_TOKEN:
-        headers["Authorization"] = f"token {GITHUB_TOKEN}"
-    async with aiohttp.ClientSession() as session:
-        async with session.get(api_url, headers=headers) as resp:
-            if resp.status != 200:
-                logger.error(f"GitHub API error: {resp.status}")
-                return []
-            data = await resp.json()
-            return data
-
-async def get_github_file_content(file_info: Dict) -> Optional[Dict]:
-    if file_info.get("type") != "file":
-        return None
-    download_url = file_info.get("download_url")
-    if not download_url:
-        return None
-    async with aiohttp.ClientSession() as session:
-        async with session.get(download_url) as resp:
-            if resp.status != 200:
-                return None
-            try:
-                return await resp.json()
-            except:
-                return None
-
-async def search_players_on_github(name: str) -> List[Dict]:
-    files = await get_github_files_list("brawl_data/players")
-    if not files:
-        return []
-    results = []
-    name_lower = name.lower()
-    for file_info in files:
-        if not file_info.get("name", "").endswith(".json"):
-            continue
-        data = await get_github_file_content(file_info)
-        if data and data.get("name"):
-            if name_lower in data["name"].lower():
-                results.append(data)
-    return results
-
-async def search_clubs_on_github(name: str) -> List[Dict]:
-    files = await get_github_files_list("brawl_data/clubs")
-    if not files:
-        return []
-    results = []
-    name_lower = name.lower()
-    for file_info in files:
-        if not file_info.get("name", "").endswith(".json"):
-            continue
-        data = await get_github_file_content(file_info)
-        if data and data.get("name"):
-            if name_lower in data["name"].lower():
-                results.append(data)
-    return results
-
-async def get_player_from_github(tag: str) -> Optional[Dict]:
-    tag_upper = tag.upper().replace('#', '')
-    files = await get_github_files_list("brawl_data/players")
-    for file_info in files:
-        if file_info.get("type") != "file":
-            continue
-        name = file_info.get("name", "")
-        if name.endswith(".json") and name.replace(".json", "").upper() == tag_upper:
-            return await get_github_file_content(file_info)
-    return None
-
-async def get_club_from_github(tag: str) -> Optional[Dict]:
-    tag_upper = tag.upper().replace('#', '')
-    files = await get_github_files_list("brawl_data/clubs")
-    for file_info in files:
-        if file_info.get("type") != "file":
-            continue
-        name = file_info.get("name", "")
-        if name.endswith(".json") and name.replace(".json", "").upper() == tag_upper:
-            return await get_github_file_content(file_info)
-    return None#!/usr/bin/env python3
-"""
-Brawl Stats CLI — интерфейс для анализа Brawl Stars.
-Навигация: ↑↓ / Tab / Shift+Tab → выбор, Enter → подтверждение, q → выход
-"""
-import sys
-import asyncio
-import json
-import os
-import time
-import threading
-import random
-import aiohttp
-from datetime import datetime, timedelta
+import shutil
+from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
-from urllib.parse import quote
+from math import ceil
 
 from rich.console import Console
 from rich.table import Table
@@ -290,15 +24,29 @@ from rich.rule import Rule
 from rich.panel import Panel
 from rich.text import Text
 from rich.progress import Progress, BarColumn, TextColumn, TimeElapsedColumn
+from rich.align import Align
 
 from prompt_toolkit import Application as PTApp
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout import Layout, HSplit, Window
 from prompt_toolkit.layout.controls import FormattedTextControl
-from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.styles import Style as PTStyle
 
-from config import API_KEYS, SEARCH_CFG, APP_CFG, SYNC_CFG, GITHUB_REPO_URL, GITHUB_TOKEN
+try:
+    from config import (
+        API_KEYS, SEARCH_CFG, APP_CFG, SYNC_CFG,
+        GITHUB_REPO_URL, GITHUB_TOKEN, API_SERVER_URL, BRAWLNEST_API_KEY,
+    )
+except ImportError:
+    API_KEYS = []
+    SEARCH_CFG = {}
+    APP_CFG = {}
+    SYNC_CFG = {}
+    GITHUB_REPO_URL = "https://github.com/egoffn1/BrawlNest"
+    GITHUB_TOKEN = ""
+    API_SERVER_URL = os.getenv("API_SERVER_URL", "http://130.12.46.224")
+    BRAWLNEST_API_KEY = os.getenv("API_KEY", "")
+
 from database import Database
 from api_client import BrawlAPIClient
 from collectors.player_collector import PlayerCollector
@@ -307,137 +55,71 @@ from utils.logger import setup_logger
 from utils.tag_generator import generate_tags
 from sync_github import GitHubSync
 
-# Проверка наличия библиотек для PNG
 PNG_AVAILABLE = False
 try:
-    import matplotlib
-    matplotlib.use('Agg')
+    import matplotlib; matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from PIL import Image
-    import io
+    import io, numpy as np
     PNG_AVAILABLE = True
 except ImportError:
     pass
 
-# ── консоль ──────────────────────────────────────────────────────────────────
 console = Console(highlight=False)
-logger = setup_logger()
+logger  = setup_logger(__name__)
 
-# ── стиль ────────────────────────────────────────────────────────────────────
 PT_STYLE = PTStyle.from_dict({
     "cursor":   "bold #f97316",
     "selected": "bold #ffffff",
     "item":     "#d1d5db",
     "dim":      "#4b5563",
     "prompt":   "bold #f97316",
-    "text":     "#ffffff",
 })
 
-# ── названия режимов ────────────────────────────────────────────────────────
 MODE_NAMES = {
-    "soloShowdown": "🌵 Столкновение (соло)",
-    "duoShowdown":  "👥 Столкновение (дуо)",
-    "brawlBall":    "⚽ Броулбол",
-    "knockout":     "🥊 Нокаут",
-    "heist":        "💰 Ограбление",
-    "hotZone":      "🔥 Горячая зона",
-    "bounty":       "🏆 Охота",
-    "gemGrab":      "💎 Захват кристаллов",
-    "duels":        "⚔️ Дуэли",
-    "wipeout":      "🧹 Зачистка",
-    "basketBrawl":  "🏀 Баскетбой",
-    "roboRumble":   "🤖 Вторжение роботов",
-    "bossFight":    "👾 Битва с боссом",
-    "bigGame":      "🐘 Большая игра",
-    "siege":        "🏰 Осада",
-    "trioShowdown": "👥 Столкновение (трио)",
-    "wipeout5V5":   "🧹 Зачистка 5x5",
-    "knockout5V5":  "🥊 Нокаут 5x5",
-    "ranked":       "🏆 Ранговый режим",
-    "special":      "✨ Особое событие",
-    "unknown":      "❓ Неизвестный режим",
+    "soloShowdown": "🌵 Соло-шоудаун", "duoShowdown": "👥 Дуо-шоудаун",
+    "brawlBall": "⚽ Броулбол", "knockout": "🥊 Нокаут", "heist": "💰 Ограбление",
+    "hotZone": "🔥 Горячая зона", "bounty": "🏆 Охота", "gemGrab": "💎 Кристаллы",
+    "duels": "⚔️ Дуэли", "wipeout": "🧹 Зачистка", "basketBrawl": "🏀 Баскетбой",
+    "roboRumble": "🤖 Роборамбо", "bossFight": "👾 Битва с боссом",
+    "bigGame": "🐘 Большая игра", "siege": "🏰 Осада",
+    "trioShowdown": "👥 Трио-шоудаун", "ranked": "🏆 Ранговый",
+}
+MAP_TRANS = {
+    "Hard Rock Mine": "Хард-рок шахта", "Mushroom Meadow": "Грибная лощина",
+    "Cavern Churn": "Штольня", "Snake Prairie": "Змеиные поля",
+    "Feast or Famine": "Всё или ничего", "Out in the Open": "В чистом поле",
+    "Center Stage": "Центровая площадка", "Crystal Cavern": "Кристальная пещера",
 }
 
-MAP_TRANSLATIONS = {
-    "Hard Rock Mine": "Хард-рок шахта",
-    "Mushroom Meadow": "Грибная лощина",
-    "Minecart Madness": "Вагонетка без тормозов",
-    "Deathcap Trap": "Смертельная ловушка",
-    "Double Swoosh": "Двойной изгиб",
-    "Angled Mountain": "Угловатая гора",
-    "Crystal Cavern": "Кристальная пещера",
-    "Deep Hollows": "Подземные пустоты",
-    "Triple Dribble": "Трипл-дриблинг",
-    "Center Stage": "Центровая площадка",
-    "Super Beach": "Суперпляж",
-    "Sunny Soccer": "Солнечный футбол",
-    "Pinhole Punt": "Щелевой удар",
-    "Snake Prairie": "Змеиные поля",
-    "Goalkeeper's Dream": "Мечта вратаря",
-    "Pinball Dreams": "Пинбол мечты",
-    "Feast or Famine": "Всё или ничего",
-    "Cavern Churn": "Штольня",
-    "Double Trouble": "Двойные озера",
-    "Death Landscapes": "Озеро мертвецов",
-    "Two Thousand Lakes": "Две тысячи озёр",
-    "Acid Lakes": "Кислотные озёра",
-    "Woodland Lilies": "Лесные лилии",
-    "Lotus": "Лотос",
-    "Starfruit Supernova": "Звёздная сверхновая",
-    "Out in the Open": "В чистом поле",
-    "Goldarm Gulch": "Ущелье Золотого Дракона",
-    "Belle's Rock": "Скала Белль",
-    "New Horizon": "Новый горизонт",
-    "Beautiful Garden": "Прекрасный сад",
-    "Flaring Phoenix": "Пылающий феникс",
-    "Hot Potato": "Горячая кукуруза",
-    "Safe Zone": "Керки в кустах",
-    "Bridge Too Far": "Поворот на мосту",
-    "GG Mortuary": "Морг Мортиса",
-    "Bridge Spam": "Взятие моста",
-    "Quintillion": "Квинтиллион",
-    "Ring of Fire": "Огненное кольцо",
-    "Parallel Plays": "Параллельная игра",
-    "Open Zone": "Открытая зона",
-    "Dueling Beetles": "Дуэльные жуки",
-    "Layer Cake": "Кремовый торт",
-    "Snake Prairie": "Змеиные степи",
-    "Grand Canal": "Гранд-канал",
-    "Shooting Star": "Падающая звезда",
-    "Storage Sector": "Складской сектор",
-    "Hoop Boot Hill": "Баскетбольный холм",
-    "Jumpscare Lair": "Логово страха",
-    "Hideout": "Убежище",
-    "H is for Holiday": "H как праздник",
-    "Mirage Arena": "Арена миражей",
-    "Icy ice park": "Ледяной парк",
-    "Hello Always Ends With a Goodbye": "Привет всегда заканчивается прощанием",
-    "Crescendo": "Крещендо",
-}
-
-# ── глобальные объекты ───────────────────────────────────────────────────────
-db: Database
-api: BrawlAPIClient
-player_col: PlayerCollector
-club_col: ClubCollector
+# ── Globals ───────────────────────────────────────────────────────────────────
+db: Optional[Database] = None
+api: Optional[BrawlAPIClient] = None
+player_col: Optional[PlayerCollector] = None
+club_col: Optional[ClubCollector] = None
 search_mode = "offline"
+HAS_BRAWL_KEYS = False
+API_KEY = BRAWLNEST_API_KEY   # ключ для BrawlNest REST API
+BASE_URL = API_SERVER_URL.rstrip("/")
 SEARCH_MODE_FILE = "search_mode.txt"
-HAS_API_KEYS = True
-API_SERVER_URL = os.getenv("API_SERVER_URL", "http://130.12.46.224:8080")
-API_KEY = os.getenv("API_KEY", "")
+
+# Menu position persistence file
+MENU_POS_FILE = ".menu_pos"
+
 
 def load_search_mode():
     global search_mode
     try:
         if os.path.exists(SEARCH_MODE_FILE):
-            with open(SEARCH_MODE_FILE, "r") as f:
-                mode = f.read().strip().lower()
+            with open(SEARCH_MODE_FILE) as f:
+                mode = f.read().strip()
                 if mode in ("offline", "online"):
                     search_mode = mode
                     return
-    except:
+    except Exception:
         pass
     search_mode = APP_CFG.get("search_mode", "offline")
+
 
 def save_search_mode(mode: str):
     global search_mode
@@ -445,911 +127,106 @@ def save_search_mode(mode: str):
     try:
         with open(SEARCH_MODE_FILE, "w") as f:
             f.write(mode)
-    except:
+    except Exception:
         pass
 
-# ═════════════════════════════════════════════════════════════════════════════
-# GitHub API
-# ═════════════════════════════════════════════════════════════════════════════
 
-async def get_github_files_list(repo_path: str) -> List[Dict]:
-    repo_url = GITHUB_REPO_URL.rstrip(".git")
-    parts = repo_url.split("/")
-    owner = parts[-2]
-    repo = parts[-1]
-    api_url = f"https://api.github.com/repos/{owner}/{repo}/contents/{repo_path}"
-    headers = {}
-    if GITHUB_TOKEN:
-        headers["Authorization"] = f"token {GITHUB_TOKEN}"
-    async with aiohttp.ClientSession() as session:
-        async with session.get(api_url, headers=headers) as resp:
-            if resp.status != 200:
-                logger.error(f"GitHub API error: {resp.status}")
-                return []
-            data = await resp.json()
-            return data
+# ═══════════════════════════════════════════════════════════════════
+# BrawlNest REST API client
+# ═══════════════════════════════════════════════════════════════════
 
-async def get_github_file_content(file_info: Dict) -> Optional[Dict]:
-    if file_info.get("type") != "file":
+async def _nest_get(path: str, params: Optional[Dict] = None) -> Optional[Any]:
+    """GET к BrawlNest REST API."""
+    if not API_KEY:
         return None
-    download_url = file_info.get("download_url")
-    if not download_url:
-        return None
-    async with aiohttp.ClientSession() as session:
-        async with session.get(download_url) as resp:
-            if resp.status != 200:
-                return None
-            try:
-                return await resp.json()
-            except:
-                return None
-
-async def search_players_on_github(name: str) -> List[Dict]:
-    files = await get_github_files_list("brawl_data/players")
-    if not files:
-        return []
-    results = []
-    name_lower = name.lower()
-    for file_info in files:
-        if not file_info.get("name", "").endswith(".json"):
-            continue
-        data = await get_github_file_content(file_info)
-        if data and data.get("name"):
-            if name_lower in data["name"].lower():
-                results.append(data)
-    return results
-
-async def search_clubs_on_github(name: str) -> List[Dict]:
-    files = await get_github_files_list("brawl_data/clubs")
-    if not files:
-        return []
-    results = []
-    name_lower = name.lower()
-    for file_info in files:
-        if not file_info.get("name", "").endswith(".json"):
-            continue
-        data = await get_github_file_content(file_info)
-        if data and data.get("name"):
-            if name_lower in data["name"].lower():
-                results.append(data)
-    return results
-
-async def get_player_from_github(tag: str) -> Optional[Dict]:
-    tag_upper = tag.upper().replace('#', '')
-    files = await get_github_files_list("brawl_data/players")
-    for file_info in files:
-        if file_info.get("type") != "file":
-            continue
-        name = file_info.get("name", "")
-        if name.endswith(".json") and name.replace(".json", "").upper() == tag_upper:
-            return await get_github_file_content(file_info)
+    url = f"{BASE_URL}{path}"
+    headers = {"X-API-Key": API_KEY}
+    if params is None:
+        params = {}
+    try:
+        async with aiohttp.ClientSession() as sess:
+            async with sess.get(url, headers=headers, params=params,
+                                timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                if resp.status == 200:
+                    return await resp.json()
+                logger.debug(f"BrawlNest GET {path} → {resp.status}")
+    except Exception as e:
+        logger.debug(f"BrawlNest GET error {path}: {e}")
     return None
 
-async def get_club_from_github(tag: str) -> Optional[Dict]:
-    tag_upper = tag.upper().replace('#', '')
-    files = await get_github_files_list("brawl_data/clubs")
-    for file_info in files:
-        if file_info.get("type") != "file":
-            continue
-        name = file_info.get("name", "")
-        if name.endswith(".json") and name.replace(".json", "").upper() == tag_upper:
-            return await get_github_file_content(file_info)
+
+async def _nest_post(path: str, json_body: Optional[Dict] = None,
+                     params: Optional[Dict] = None) -> Optional[Any]:
+    """POST к BrawlNest REST API."""
+    if not API_KEY:
+        return None
+    url = f"{BASE_URL}{path}"
+    headers = {"X-API-Key": API_KEY, "Content-Type": "application/json"}
+    try:
+        async with aiohttp.ClientSession() as sess:
+            async with sess.post(url, headers=headers, json=json_body,
+                                 params=params,
+                                 timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                if resp.status in (200, 201):
+                    return await resp.json()
+    except Exception as e:
+        logger.debug(f"BrawlNest POST error {path}: {e}")
     return None
 
-# ═════════════════════════════════════════════════════════════════════════════
+
+async def _nest_delete(path: str) -> bool:
+    if not API_KEY:
+        return False
+    url = f"{BASE_URL}{path}"
+    headers = {"X-API-Key": API_KEY}
+    try:
+        async with aiohttp.ClientSession() as sess:
+            async with sess.delete(url, headers=headers,
+                                   timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                return resp.status in (200, 204)
+    except Exception:
+        return False
+
+
+# ═══════════════════════════════════════════════════════════════════
 # Инициализация
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 
 async def _init():
-    global db, api, player_col, club_col, HAS_API_KEYS
+    global db, api, player_col, club_col, HAS_BRAWL_KEYS
     db = Database()
-    await db.connect()
+    try:
+        await db.connect()
+    except Exception as e:
+        logger.warning(f"DB connect failed: {e}. Running without local DB.")
+        db = None
     api = BrawlAPIClient()
-    player_col = PlayerCollector(api, db)
-    club_col = ClubCollector(api, db)
+    if db:
+        player_col = PlayerCollector(api, db)
+        club_col   = ClubCollector(api, db)
+    HAS_BRAWL_KEYS = bool(API_KEYS)
     load_search_mode()
-    HAS_API_KEYS = bool(API_KEYS)
-    if not HAS_API_KEYS:
-        console.print("[yellow]⚠️  API ключи отсутствуют. Будут доступны только функции поиска по GitHub и просмотр сохранённых данных.[/yellow]")
-        global search_mode
-        if search_mode == "offline":
-            search_mode = "online"
-            save_search_mode("online")
-            console.print("[dim]Режим поиска автоматически переключён на ОНЛАЙН (GitHub).[/dim]")
 
-# ═════════════════════════════════════════════════════════════════════════════
-# Утилиты вывода
-# ═════════════════════════════════════════════════════════════════════════════
+
+# ═══════════════════════════════════════════════════════════════════
+# Output helpers
+# ═══════════════════════════════════════════════════════════════════
 
 def _hr(label: str = ""):
     console.print(Rule(f"  {label}  " if label else "", style="dim #374151"))
 
-def _kv(key: str, value: str, key_style: str = "dim", val_style: str = "white"):
-    console.print(f"  [bold {key_style}]{key}[/bold {key_style}]  [{val_style}]{value}[/{val_style}]")
+def _kv(key: str, val: str, ks: str = "dim", vs: str = "white"):
+    console.print(f"  [bold {ks}]{key}[/bold {ks}]  [{vs}]{val}[/{vs}]")
 
-def _ok(msg: str):
-    console.print(f"  [bold #22c55e]✓[/bold #22c55e]  {msg}")
+def _ok(msg: str):  console.print(f"  [bold #22c55e]✓[/bold #22c55e]  {msg}")
+def _err(msg: str): console.print(f"  [bold #ef4444]✗[/bold #ef4444]  {msg}")
+def _info(msg: str): console.print(f"  [dim #9ca3af]{msg}[/dim #9ca3af]")
 
-def _err(msg: str):
-    console.print(f"  [bold #ef4444]✗[/bold #ef4444]  {msg}")
+async def _press_enter_to_continue():
+    """Показать подсказку и ждать нажатия Enter."""
+    console.print("\n  [dim]Нажмите Enter, чтобы вернуться в меню...[/dim]")
+    await asyncio.to_thread(input)
 
-def _info(msg: str):
-    console.print(f"  [dim #9ca3af]{msg}[/dim #9ca3af]")
-
-# ═════════════════════════════════════════════════════════════════════════════
-# Асинхронный ввод
-# ═════════════════════════════════════════════════════════════════════════════
-
-async def _ask(prompt: str, default: str = "") -> str:
-    try:
-        val = await asyncio.to_thread(input, f"  {prompt}: ")
-        return (val.strip() or default).strip()
-    except (KeyboardInterrupt, EOFError):
-        return default
-
-async def _ask_int(prompt: str, default: int) -> int:
-    raw = await _ask(f"{prompt} [{default}]", str(default))
-    try:
-        return int(raw)
-    except (ValueError, TypeError):
-        return default
-
-# ═════════════════════════════════════════════════════════════════════════════
-# Рейтинг (серверный)
-# ═════════════════════════════════════════════════════════════════════════════
-
-async def _add_rating_remote(action_type: str, object_id: Optional[str] = None):
-    if not API_KEY or not API_SERVER_URL:
-        return
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                f"{API_SERVER_URL}/rating/add",
-                params={"api_key": API_KEY},
-                json={"action_type": action_type, "object_id": object_id}
-            ) as resp:
-                if resp.status != 200:
-                    logger.debug(f"Rating add failed: {resp.status}")
-    except Exception as e:
-        logger.debug(f"Rating add error: {e}")
-
-async def _get_rating_remote() -> int:
-    if not API_KEY or not API_SERVER_URL:
-        return 0
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                f"{API_SERVER_URL}/rating/my",
-                params={"api_key": API_KEY}
-            ) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    return data.get("rating", 0)
-    except Exception as e:
-        logger.debug(f"Rating get error: {e}")
-    return 0
-
-async def _ensure_api_key():
-    """Автоматически создаёт и сохраняет API-ключ, если его нет или он невалиден."""
-    global API_KEY
-    if API_KEY:
-        # Проверим, что ключ валиден
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    f"{API_SERVER_URL}/rating/my",
-                    params={"api_key": API_KEY}
-                ) as resp:
-                    if resp.status == 200:
-                        return  # ключ рабочий
-        except Exception:
-            pass
-        # Ключ невалиден – генерируем новый
-        _info("API ключ недействителен. Генерируем новый...")
-    else:
-        _info("API ключ не найден. Генерируем новый...")
-
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                f"{API_SERVER_URL}/generate_key",
-                params={"name": "CLI_User", "daily_limit": 1000}
-            ) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    new_key = data.get("key")
-                    if new_key:
-                        # Сохраняем в .env
-                        env_path = os.path.join(os.path.dirname(__file__), ".env")
-                        env_content = ""
-                        if os.path.exists(env_path):
-                            with open(env_path, "r") as f:
-                                env_content = f.read()
-                        if "API_KEY=" in env_content:
-                            lines = env_content.splitlines()
-                            new_lines = []
-                            for line in lines:
-                                if line.startswith("API_KEY="):
-                                    new_lines.append(f"API_KEY={new_key}")
-                                else:
-                                    new_lines.append(line)
-                            env_content = "\n".join(new_lines)
-                        else:
-                            env_content += f"\nAPI_KEY={new_key}\n"
-                        with open(env_path, "w") as f:
-                            f.write(env_content)
-                        API_KEY = new_key
-                        _ok(f"API ключ успешно создан и сохранён в .env")
-                        return
-        _err("Не удалось создать API ключ. Проверьте доступность сервера.")
-        # Предложим ввести вручную
-        choice = await _ask("Ввести API-ключ вручную? (y/n)", "n")
-        if choice.lower() == "y":
-            key = await _ask("Введите API-ключ")
-            if key:
-                env_path = os.path.join(os.path.dirname(__file__), ".env")
-                env_content = ""
-                if os.path.exists(env_path):
-                    with open(env_path, "r") as f:
-                        env_content = f.read()
-                if "API_KEY=" in env_content:
-                    lines = env_content.splitlines()
-                    new_lines = []
-                    for line in lines:
-                        if line.startswith("API_KEY="):
-                            new_lines.append(f"API_KEY={key}")
-                        else:
-                            new_lines.append(line)
-                    env_content = "\n".join(new_lines)
-                else:
-                    env_content += f"\nAPI_KEY={key}\n"
-                with open(env_path, "w") as f:
-                    f.write(env_content)
-                API_KEY = key
-                _ok("Ключ сохранён в .env")
-    except Exception as e:
-        _err(f"Ошибка при генерации ключа: {e}")
-        _info("Возможно, сервер недоступен. Вы можете ввести ключ вручную позже через меню '🔑 Ввести API-ключ'.")
-
-# ═════════════════════════════════════════════════════════════════════════════
-# Ввод API-ключа (ручной)
-# ═════════════════════════════════════════════════════════════════════════════
-
-async def input_api_key():
-    """Запрашивает API-ключ у пользователя и сохраняет в .env."""
-    print()
-    _info("Для доступа к живому API Brawl Stars нужны ключи.")
-    _info("Вы можете получить ключи на https://developer.brawlstars.com")
-    key = await _ask("Введите один API-ключ (или несколько через запятую)")
-    if not key:
-        return
-    env_path = os.path.join(os.path.dirname(__file__), ".env")
-    env_content = ""
-    if os.path.exists(env_path):
-        with open(env_path, "r") as f:
-            env_content = f.read()
-    if "API_KEYS=" in env_content:
-        lines = env_content.splitlines()
-        new_lines = []
-        for line in lines:
-            if line.startswith("API_KEYS="):
-                new_lines.append(f"API_KEYS={key}")
-            else:
-                new_lines.append(line)
-        env_content = "\n".join(new_lines)
-    else:
-        env_content += f"\nAPI_KEYS={key}\n"
-    with open(env_path, "w") as f:
-        f.write(env_content)
-    _ok("Ключ сохранён в .env. Пожалуйста, перезапустите программу, чтобы изменения вступили в силу.")
-    console.print()
-    sys.exit(0)
-
-# ═════════════════════════════════════════════════════════════════════════════
-# Профиль игрока и другие основные функции (с проверкой наличия ключей)
-# ═════════════════════════════════════════════════════════════════════════════
-
-async def show_player(tag: str, force_update: bool = False):
-    data = None
-    if HAS_API_KEYS:
-        normalized_tag = api.normalize_tag(tag)
-        with console.status(f"[dim]Загрузка {normalized_tag}...[/dim]", spinner="dots"):
-            data = await player_col.collect(normalized_tag, force_update=force_update)
-        if not data:
-            data = await get_player_from_github(tag)
-            if data:
-                _info("⚠️ Игрок загружен из GitHub (устаревшие данные).")
-    else:
-        data = await get_player_from_github(tag)
-
-    if not data:
-        _err(f"❌ Игрок {tag} не найден (ни в API, ни в GitHub).")
-        _info("Возможно, вы хотите добавить API-ключ для получения свежих данных?")
-        choice = await _ask("Ввести API-ключ сейчас? (y/n)", "n")
-        if choice.lower() == "y":
-            await input_api_key()
-        return
-
-    name = data['name']
-    player_tag = f"#{data['tag'].lstrip('#')}"
-    trophies = data['trophies']
-    highest = data.get('highest_trophies', '?')
-    exp_level = data.get('exp_level', '?')
-    exp_points = data.get('exp_points', 0)
-    wins_3v3 = data.get('wins_3v3', 0)
-    wins_solo = data.get('wins_solo', 0)
-    wins_duo = data.get('wins_duo', 0)
-    club = data.get('club_tag')
-    club_display = f"#{club.lstrip('#')}" if club else "[dim]—[/dim]"
-
-    stats_table = Table(show_header=False, box=box.SIMPLE, padding=(0, 1))
-    stats_table.add_column(style="bold #f97316", width=18)
-    stats_table.add_column(style="white")
-
-    stats_table.add_row("🏆 Трофеи", f"{trophies} [dim](макс {highest})[/dim]")
-    stats_table.add_row("⭐ Уровень", f"{exp_level} [dim]({exp_points} XP)[/dim]")
-    stats_table.add_row("🥇 Победы 3x3", str(wins_3v3))
-    stats_table.add_row("🌵 Победы соло", str(wins_solo))
-    stats_table.add_row("👥 Победы дуо", str(wins_duo))
-    stats_table.add_row("🏠 Клуб", club_display)
-
-    panel = Panel(
-        stats_table,
-        title=f"[bold cyan]{name}[/bold cyan] [dim]{player_tag}[/dim]",
-        border_style="bright_blue",
-        box=box.ROUNDED,
-        padding=(0, 1)
-    )
-    console.print(panel)
-    console.print()
-    await _add_rating_remote("player_view", tag)
-
-async def show_battles(tag: str, limit: int = 10):
-    battles = []
-    if HAS_API_KEYS:
-        with console.status(f"[dim]Загрузка боёв {tag}...[/dim]", spinner="dots"):
-            await player_col.collect(tag)
-            battles = await db.get_battles(tag.replace("#", ""), limit=limit)
-    else:
-        player_data = await get_player_from_github(tag)
-        if player_data and player_data.get("battles"):
-            battles = player_data.get("battles")[:limit]
-            _info("⚠️ Бои загружены из GitHub (могут быть неактуальны).")
-
-    if not battles:
-        _err("❌ Боевой лог пуст или игрок не найден")
-        if not HAS_API_KEYS:
-            _info("Попробуйте добавить API-ключ для получения актуальных данных.")
-            choice = await _ask("Ввести API-ключ сейчас? (y/n)", "n")
-            if choice.lower() == "y":
-                await input_api_key()
-        return
-
-    console.print()
-    _hr(f"📜 Последние бои · {tag}")
-    table = Table(box=box.MINIMAL, show_header=True,
-                  header_style="dim #9ca3af", padding=(0, 2))
-    table.add_column("Время", style="dim", min_width=16)
-    table.add_column("Режим", min_width=24)
-    table.add_column("Карта", style="dim", min_width=20)
-    table.add_column("Результат", min_width=12)
-    table.add_column("Δ", justify="right", min_width=5)
-
-    for b in battles:
-        bt = (b.get("battle_time") or "")[:16]
-        raw_mode = b.get("battle_mode") or "?"
-        result = b.get("result") or "?"
-        tch = b.get("trophies_change")
-        map_name = ""
-        if b.get("raw_data"):
-            try:
-                map_name = json.loads(b["raw_data"]).get("event", {}).get("map", "") or ""
-            except Exception:
-                pass
-
-        res_str = (
-            "[#4ade80]✔ Победа[/#4ade80]" if result == "victory" else
-            "[#f87171]✘ Поражение[/#f87171]" if result == "defeat" else
-            f"[dim]{result}[/dim]"
-        )
-        tch_str = (
-            f"[#4ade80]+{tch}[/#4ade80]" if tch and tch > 0 else
-            f"[#f87171]{tch}[/#f87171]" if tch and tch < 0 else
-            "[dim]—[/dim]"
-        )
-        map_name_translated = MAP_TRANSLATIONS.get(map_name, map_name)
-        table.add_row(bt, MODE_NAMES.get(raw_mode, raw_mode), map_name_translated, res_str, tch_str)
-
-    console.print(table)
-    _hr()
-    console.print()
-    await _add_rating_remote("battles_view", tag)
-
-async def show_club(tag: str, show_members: bool = False):
-    data = None
-    if HAS_API_KEYS:
-        with console.status(f"[dim]Загрузка клуба {tag}...[/dim]", spinner="dots"):
-            data = await club_col.collect(tag)
-        if not data:
-            data = await get_club_from_github(tag)
-            if data:
-                _info("⚠️ Клуб загружен из GitHub (устаревшие данные).")
-    else:
-        data = await get_club_from_github(tag)
-
-    if not data:
-        _err(f"❌ Клуб {tag} не найден (ни в API, ни в GitHub).")
-        choice = await _ask("Ввести API-ключ сейчас? (y/n)", "n")
-        if choice.lower() == "y":
-            await input_api_key()
-        return
-
-    console.print()
-    _hr(f"🏢 {data['name']} [dim]#{data['tag'].lstrip('#')}[/dim]")
-    _kv("🏆 Трофеи", str(data.get("trophies", 0)), "dim", "#4ade80")
-    _kv("📜 Требуется", str(data.get("required_trophies", "?")), "dim", "white")
-    _kv("👥 Участников", str(data.get("members_count", "?")), "dim", "white")
-    _kv("🏷️ Тип", str(data.get("type", "?")), "dim", "white")
-    if data.get("description"):
-        _kv("📝 Описание", data["description"].strip(), "dim", "dim white")
-    _hr()
-    console.print()
-
-    if show_members:
-        members = await db.get_club_members(data["tag"])
-        if members:
-            _hr(f"👥 Участники ({len(members)})")
-            table = Table(box=box.MINIMAL, show_header=True,
-                          header_style="dim #9ca3af", padding=(0, 2))
-            table.add_column("#", justify="right", style="dim", min_width=3)
-            table.add_column("Имя", min_width=18)
-            table.add_column("Тег", style="#67e8f9", min_width=12)
-            table.add_column("Роль", style="dim", min_width=10)
-            table.add_column("🏆", justify="right", min_width=8)
-            for i, m in enumerate(members, 1):
-                table.add_row(
-                    str(i), m["name"], m["player_tag"],
-                    m.get("role") or "—",
-                    f"[#4ade80]{m['trophies']}[/#4ade80]",
-                )
-            console.print(table)
-            _hr()
-            console.print()
-    await _add_rating_remote("club_view", tag)
-
-# ═════════════════════════════════════════════════════════════════════════════
-# Поиск игрока по нику (офлайн/онлайн через GitHub)
-# ═════════════════════════════════════════════════════════════════════════════
-
-async def search_player_by_name():
-    name = await _ask("Введите имя игрока (полностью или часть)")
-    if not name:
-        return
-
-    actual_mode = search_mode
-    if not HAS_API_KEYS and actual_mode == "offline":
-        actual_mode = "online"
-        _info("API ключи отсутствуют — поиск выполняется в GitHub.")
-
-    if actual_mode == "offline":
-        players = await db.search_players_by_name(name, limit=50)
-        if not players:
-            _err("Ничего не найдено в локальной базе. Попробуйте переключиться в онлайн-режим или заполнить базу.")
-            return
-        console.print()
-        _hr(f"🔍 Результаты поиска по имени: {name} (локальная база)")
-        table = Table(box=box.MINIMAL, show_header=True,
-                      header_style="dim #9ca3af", padding=(0, 2))
-        table.add_column("#", justify="right", style="dim", min_width=3)
-        table.add_column("Тег", style="#67e8f9", min_width=12)
-        table.add_column("Имя", min_width=20)
-        table.add_column("Трофеи", justify="right", min_width=8)
-        table.add_column("Клуб", style="dim", min_width=12)
-        for i, p in enumerate(players, 1):
-            table.add_row(
-                str(i),
-                p.get("tag", "?"),
-                p.get("name", "?"),
-                f"[#4ade80]{p.get('trophies', 0)}[/#4ade80]",
-                p.get("club_tag") or "—"
-            )
-        console.print(table)
-        _hr()
-        console.print()
-        await _add_rating_remote("search_name", name)
-        return
-
-    _info("Поиск по репозиторию GitHub...")
-    players = await search_players_on_github(name)
-    if not players:
-        _err(f"Не найдено игроков с именем, содержащим '{name}', в GitHub репозитории.")
-        return
-
-    console.print()
-    _hr(f"🔍 Результаты поиска по имени: {name} (GitHub база)")
-    table = Table(box=box.MINIMAL, show_header=True,
-                  header_style="dim #9ca3af", padding=(0, 2))
-    table.add_column("#", justify="right", style="dim", min_width=3)
-    table.add_column("Тег", style="#67e8f9", min_width=12)
-    table.add_column("Имя", min_width=20)
-    table.add_column("Трофеи", justify="right", min_width=8)
-    table.add_column("Клуб", style="dim", min_width=12)
-    for i, p in enumerate(players, 1):
-        table.add_row(
-            str(i),
-            p.get("tag", "?"),
-            p.get("name", "?"),
-            f"[#4ade80]{p.get('trophies', 0)}[/#4ade80]",
-            p.get("club_tag") or "—"
-        )
-    console.print(table)
-    _hr()
-    console.print()
-    await _add_rating_remote("search_name", name)
-
-# ═════════════════════════════════════════════════════════════════════════════
-# Сохранение статистики в PNG (требует API)
-# ═════════════════════════════════════════════════════════════════════════════
-
-async def save_player_stats_png(tag: str):
-    if not PNG_AVAILABLE:
-        _err("❌ Библиотеки matplotlib или Pillow не установлены. Установите: pip install matplotlib pillow")
-        return
-    if not HAS_API_KEYS:
-        _err("❌ Нет API ключей. Невозможно получить данные игрока.")
-        return
-    from pathlib import Path
-    normalized_tag = api.normalize_tag(tag)
-    with console.status(f"[dim]Загрузка {normalized_tag}...[/dim]", spinner="dots"):
-        data = await player_col.collect(normalized_tag, force_update=False)
-    if not data:
-        last_status = api.last_status
-        if last_status == 403:
-            _err("❌ Ошибка 403 — ключ недействителен или истёк")
-        elif last_status == 429:
-            _err("⚠️ Ошибка 429 — превышен лимит запросов, подождите")
-        elif last_status == 404:
-            _err(f"❌ Игрок {normalized_tag} не найден.")
-        else:
-            _err("❌ Игрок не найден или ошибка API")
-        return
-
-    name = data['name']
-    player_tag = data['tag']
-    trophies = data['trophies']
-    highest = data.get('highest_trophies', trophies)
-    exp_level = data.get('exp_level', '?')
-    exp_points = data.get('exp_points', 0)
-    wins_3v3 = data.get('wins_3v3', 0)
-    wins_solo = data.get('wins_solo', 0)
-    wins_duo = data.get('wins_duo', 0)
-    club = data.get('club_tag')
-    club_display = club if club else "—"
-    icon_id = data.get('icon_id', 0)
-
-    avatar_img = None
-    cache_dir = Path("icon_cache")
-    cache_dir.mkdir(exist_ok=True)
-    cache_file = cache_dir / f"{icon_id}.png"
-
-    if cache_file.exists():
-        try:
-            avatar_img = Image.open(cache_file)
-        except:
-            pass
-
-    if avatar_img is None:
-        repo_url = GITHUB_REPO_URL.rstrip(".git")
-        parts = repo_url.split("/")
-        owner = parts[-2]
-        repo = parts[-1]
-        raw_url = f"https://raw.githubusercontent.com/{owner}/{repo}/icon/icon/{icon_id}.png"
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(raw_url) as resp:
-                    if resp.status == 200:
-                        img_data = await resp.read()
-                        with open(cache_file, "wb") as f:
-                            f.write(img_data)
-                        avatar_img = Image.open(io.BytesIO(img_data))
-                    else:
-                        unknown_path = Path("unknown_icon.webp")
-                        if unknown_path.exists():
-                            avatar_img = Image.open(unknown_path)
-        except Exception as e:
-            print(f"⚠️ Ошибка загрузки иконки {icon_id}: {e}")
-
-    # Построение графика
-    labels = ['3x3', 'Соло', 'Дуо']
-    sizes = [wins_3v3, wins_solo, wins_duo]
-    colors = ['#3b82f6', '#ef4444', '#10b981']
-    explode = (0.05, 0.05, 0.05)
-
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 9), facecolor='#0f172a')
-    fig.patch.set_facecolor('#0f172a')
-    ax1.set_facecolor('#0f172a')
-    ax2.set_facecolor('#0f172a')
-
-    wedges, texts, autotexts = ax1.pie(
-        sizes,
-        labels=labels,
-        autopct=lambda pct: f'{pct:.1f}%' if pct > 0 else '',
-        startangle=90,
-        colors=colors,
-        explode=explode,
-        shadow=True,
-        wedgeprops={'edgecolor': '#ffffff', 'linewidth': 1.5, 'alpha': 0.9},
-        textprops={'color': 'white', 'fontsize': 12, 'weight': 'bold'}
-    )
-    for autotext in autotexts:
-        autotext.set_color('white')
-        autotext.set_fontsize(13)
-        autotext.set_weight('bold')
-    ax1.set_title('Распределение побед', color='#facc15', fontsize=16, pad=20, weight='bold')
-
-    stats_text = (
-        f"🏆 {name}  {player_tag}\n\n"
-        f"Трофеи: {trophies} (макс {highest})\n"
-        f"Уровень: {exp_level} ({exp_points} XP)\n"
-        f"Победы 3x3: {wins_3v3}\n"
-        f"Победы соло: {wins_solo}\n"
-        f"Победы дуо: {wins_duo}\n"
-        f"Клуб: {club_display}\n"
-        f"Обновлено: {datetime.now().strftime('%d.%m.%Y %H:%M')}"
-    )
-    ax2.text(0.1, 0.5, stats_text, transform=ax2.transAxes,
-             fontsize=13, verticalalignment='center', linespacing=1.5,
-             bbox=dict(boxstyle='round,pad=0.5', facecolor='#1e293b', edgecolor='#facc15', linewidth=2, alpha=0.9),
-             color='#e2e8f0', weight='normal')
-    ax2.axis('off')
-
-    fig.suptitle('Brawl Stars Stats', color='#facc15', fontsize=18, weight='bold', y=0.98)
-
-    if avatar_img:
-        import numpy as np
-        avatar_array = np.array(avatar_img.convert('RGB'))
-        fig.figimage(avatar_array, xo=int(fig.bbox.xmax - 90), yo=int(fig.bbox.ymax - 90), alpha=1, zorder=10)
-
-    logo_text = "BrawlStatsBot"
-    fig.text(0.95, 0.95, logo_text, transform=fig.transFigure,
-             fontsize=14, weight='bold', color='#facc15', alpha=0.7,
-             ha='right', va='top', fontfamily='sans-serif',
-             bbox=dict(boxstyle='round,pad=0.2', facecolor='#1e293b', edgecolor='#facc15', alpha=0.5))
-
-    plt.tight_layout(pad=2.0)
-    filename = f"player_{normalized_tag}.png"
-    plt.savefig(filename, dpi=200, bbox_inches='tight', facecolor=fig.get_facecolor(), edgecolor='none')
-    plt.close(fig)
-
-    _ok(f"✅ Изображение сохранено: {filename}")
-    console.print()
-    await _add_rating_remote("save_png", tag)
-
-# ═════════════════════════════════════════════════════════════════════════════
-# Поиск клуба по названию (офлайн/онлайн через GitHub)
-# ═════════════════════════════════════════════════════════════════════════════
-
-async def search_club_by_name():
-    name = await _ask("Введите название клуба (полностью или часть)")
-    if not name:
-        return
-
-    actual_mode = search_mode
-    if not HAS_API_KEYS and actual_mode == "offline":
-        actual_mode = "online"
-        _info("API ключи отсутствуют — поиск выполняется в GitHub.")
-
-    if actual_mode == "offline":
-        clubs = await db.search_clubs_by_name(name, limit=50)
-        if not clubs:
-            _err("Ничего не найдено в локальной базе. Попробуйте переключиться в онлайн-режим.")
-            return
-        console.print()
-        _hr(f"🔍 Результаты поиска по названию: {name} (локальная база)")
-        table = Table(box=box.MINIMAL, show_header=True,
-                      header_style="dim #9ca3af", padding=(0, 2))
-        table.add_column("#", justify="right", style="dim", min_width=3)
-        table.add_column("Тег", style="#67e8f9", min_width=12)
-        table.add_column("Название", min_width=20)
-        table.add_column("Трофеи", justify="right", min_width=8)
-        table.add_column("Участников", justify="right", min_width=8)
-        for i, c in enumerate(clubs, 1):
-            table.add_row(
-                str(i),
-                c.get("tag", "?"),
-                c.get("name", "?"),
-                f"[#4ade80]{c.get('trophies', 0)}[/#4ade80]",
-                str(c.get("members_count", 0))
-            )
-        console.print(table)
-        _hr()
-        console.print()
-        await _add_rating_remote("search_club_name", name)
-        return
-
-    _info("Поиск по репозиторию GitHub...")
-    clubs = await search_clubs_on_github(name)
-    if not clubs:
-        _err(f"Не найдено клубов с названием, содержащим '{name}', в GitHub репозитории.")
-        return
-
-    console.print()
-    _hr(f"🔍 Результаты поиска по названию: {name} (GitHub база)")
-    table = Table(box=box.MINIMAL, show_header=True,
-                  header_style="dim #9ca3af", padding=(0, 2))
-    table.add_column("#", justify="right", style="dim", min_width=3)
-    table.add_column("Тег", style="#67e8f9", min_width=12)
-    table.add_column("Название", min_width=20)
-    table.add_column("Трофеи", justify="right", min_width=8)
-    table.add_column("Участников", justify="right", min_width=8)
-    for i, c in enumerate(clubs, 1):
-        table.add_row(
-            str(i),
-            c.get("tag", "?"),
-            c.get("name", "?"),
-            f"[#4ade80]{c.get('trophies', 0)}[/#4ade80]",
-            str(c.get("members_count", 0))
-        )
-    console.print(table)
-    _hr()
-    console.print()
-    await _add_rating_remote("search_club_name", name)
-
-# ═════════════════════════════════════════════════════════════════════════════
-# Остальные функции (требующие API) оставлены без изменений (проверка HAS_API_KEYS)
-# Здесь нужно вставить остальные функции из предыдущего кода,
-# но для краткости я показываю только принцип добавления рейтинга.
-# В итоговом файле должны быть все функции, которые были в предыдущей версии,
-# с добавленными вызовами _add_rating_remote для соответствующих действий.
-# Из-за ограничения длины сообщения я не могу привести весь код целиком,
-# но вы можете взять предыдущую версию cli.py и добавить вызовы рейтинга,
-# как показано выше.
-# Для завершения работы нужно также добавить пункт меню "⭐ Мой рейтинг" и функцию show_rating.
-# Давайте это сделаем.
-
-# ═════════════════════════════════════════════════════════════════════════════
-# Просмотр рейтинга
-# ═════════════════════════════════════════════════════════════════════════════
-
-async def show_rating():
-    rating = await _get_rating_remote()
-    console.print()
-    _hr("⭐ Ваш рейтинг")
-    _kv("Очки", str(rating), "dim", "yellow")
-    _info("Рейтинг повышается за каждое полезное действие: просмотр профилей, поиск, сохранение PNG, заполнение базы и т.д.")
-    _hr()
-    console.print()
-
-# ═════════════════════════════════════════════════════════════════════════════
-# Интерактивное меню (добавлен пункт "rating")
-# ═════════════════════════════════════════════════════════════════════════════
-
-MENU_ITEMS = [
-    ("separator",    "📊 ИГРОКИ"),
-    ("player",       "👤 Профиль игрока"),
-    ("battles",      "📜 Последние бои"),
-    ("update",       "🔄 Принудительное обновление игрока"),
-    ("search_name",  "🔍 Поиск игрока по нику"),
-    ("random_player","🎲 Случайный существующий игрок"),
-    ("save_png",     "📸 Сохранить статистику в PNG"),
-    ("separator",    "🏢 КЛУБЫ"),
-    ("club",         "🏢 Информация о клубе"),
-    ("club_members", "👥 Участники клуба"),
-    ("full_club",    "📊 Полный сбор данных клуба"),
-    ("check_club",   "🏢 Проверить существование клуба по тегу"),
-    ("search_clubs", "🔍 Поиск существующих клубов"),
-    ("search_club_name", "🔍 Поиск клуба по названию"),
-    ("separator",    "🔍 ПОИСК"),
-    ("search",       "🔍 Поиск существующих игроков"),
-    ("checkfile",    "📁 Проверить теги из файла"),
-    ("checkfile_active", "📁 Проверить теги из файла (только активные)"),
-    ("check_team",   "🎮 Проверить командную игру по тегам"),
-    ("separator",    "🎮 ИГРОВОЙ КОНТЕНТ"),
-    ("brawlers",     "🤖 Список бравлеров"),
-    ("rotation",     "🎡 Текущая ротация событий"),
-    ("rank_players", "🏆 Топ-игроки (рейтинг)"),
-    ("rank_clubs",   "🏅 Топ-клубы (рейтинг)"),
-    ("locations",    "🌍 Список стран"),
-    ("powerplay",    "⚡ Сезоны Power Play"),
-    ("separator",    "⚙️ НАСТРОЙКИ"),
-    ("check_keys",   "🔑 Проверить API ключи"),
-    ("enter_api_key","🔑 Ввести API-ключ"),
-    ("set_mode",     "🌐 Режим поиска (офлайн/онлайн)"),
-    ("gen_codes",    "🔑 Генерация случайных кодов (тегов)"),
-    ("fill_db",      "📥 Заполнить базу данных (однократно)"),
-    ("continuous_fill", "🔄 Непрерывное заполнение БД"),
-    ("sync_push",    "⬆️ Выгрузить данные в GitHub"),
-    ("sync_pull",    "⬇️ Загрузить данные из GitHub"),
-    ("rating",       "⭐ Мой рейтинг"),
-    ("separator",    "🚪 ВЫХОД"),
-    ("exit",         "🚪 Выход"),
-]
-
-# Удалим сепараторы из списка для навигации
-_MENU_ITEMS_FILTERED = [(k, v) for k, v in MENU_ITEMS if k != "separator"]
-_N = len(_MENU_ITEMS_FILTERED)
-
-def _run_menu() -> str:
-    """Блокирующее интерактивное меню с категориями (сепараторы не выбираются)."""
-    idx = [0]
-    result: list = [None]
-
-    # Создаём список для отображения: каждый элемент – (value, label, is_separator)
-    display_items = []
-    for value, label in MENU_ITEMS:
-        if value == "separator":
-            display_items.append(("separator", label, True))
-        else:
-            display_items.append((value, label, False))
-
-    def get_fragments():
-        fragments = []
-        for i, (val, label, is_sep) in enumerate(display_items):
-            if is_sep:
-                fragments.append(('class:dim', f'\n {label}\n'))
-            else:
-                if i == idx[0]:
-                    fragments.append(('class:selected', f' ❯ {label}\n'))
-                else:
-                    fragments.append(('class:item', f'   {label}\n'))
-        return fragments
-
-    ctrl = FormattedTextControl(text=get_fragments, focusable=False)
-    kb = KeyBindings()
-
-    # Перемещаемся только по не-сепараторам
-    def get_next_non_separator(current):
-        next_idx = current
-        while True:
-            next_idx = (next_idx + 1) % len(display_items)
-            if display_items[next_idx][0] != "separator":
-                return next_idx
-    def get_prev_non_separator(current):
-        prev_idx = current
-        while True:
-            prev_idx = (prev_idx - 1) % len(display_items)
-            if display_items[prev_idx][0] != "separator":
-                return prev_idx
-
-    @kb.add("up")
-    @kb.add("s-tab")
-    def _up(event):
-        idx[0] = get_prev_non_separator(idx[0])
-        ctrl.text = get_fragments
-
-    @kb.add("down")
-    @kb.add("tab")
-    def _down(event):
-        idx[0] = get_next_non_separator(idx[0])
-        ctrl.text = get_fragments
-
-    @kb.add("enter")
-    def _enter(event):
-        val = display_items[idx[0]][0]
-        if val != "separator":
-            result[0] = val
-            event.app.exit()
-
-    @kb.add("q")
-    @kb.add("c-c")
-    def _quit(event):
-        result[0] = "exit"
-        event.app.exit()
-
-    app = PTApp(
-        layout=Layout(HSplit([Window(content=ctrl)])),
-        key_bindings=kb,
-        style=PT_STYLE,
-        mouse_support=False,
-        full_screen=False,
-    )
-    app.run()
-    return result[0] or "exit"
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# Асинхронный ввод
-# ═════════════════════════════════════════════════════════════════════════════
 
 async def _ask(prompt: str, default: str = "") -> str:
     try:
@@ -1367,993 +244,1153 @@ async def _ask_int(prompt: str, default: int) -> int:
         return default
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# Ввод API-ключа
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
+# API Key management
+# ═══════════════════════════════════════════════════════════════════
 
-async def _ensure_api_key():
-    """Автоматически создаёт и сохраняет API-ключ, если его нет или он невалиден."""
+def _save_env_key(key: str):
+    global API_KEY
+    env_path = os.path.join(os.path.dirname(__file__), ".env")
+    content = ""
+    if os.path.exists(env_path):
+        with open(env_path) as f:
+            content = f.read()
+    lines = [l for l in content.splitlines() if not l.startswith("API_KEY=")]
+    lines.append(f"API_KEY={key}")
+    with open(env_path, "w") as f:
+        f.write("\n".join(lines) + "\n")
+    API_KEY = key
+
+
+async def ensure_api_key():
     global API_KEY
     if API_KEY:
-        # Проверим, что ключ валиден
+        # validate
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    f"{API_SERVER_URL}/rating/my",
-                    params={"api_key": API_KEY}
-                ) as resp:
-                    if resp.status == 200:
-                        return  # ключ рабочий
+            async with aiohttp.ClientSession() as sess:
+                async with sess.get(f"{BASE_URL}/ping",
+                                    timeout=aiohttp.ClientTimeout(total=5)) as r:
+                    if r.status == 200:
+                        # Try validate key
+                        async with sess.get(
+                            f"{BASE_URL}/my_status",
+                            params={"api_key": API_KEY},
+                            timeout=aiohttp.ClientTimeout(total=5)
+                        ) as r2:
+                            if r2.status == 200:
+                                return
         except Exception:
             pass
-        # Ключ невалиден – генерируем новый
-        _info("API ключ недействителен. Генерируем новый...")
-    else:
-        _info("API ключ не найден. Генерируем новый...")
 
+    console.print()
+    _info(f"Подключение к BrawlNest API: {BASE_URL}")
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                f"{API_SERVER_URL}/generate_key",
-                params={"name": "CLI_User", "daily_limit": 1000}
+        async with aiohttp.ClientSession() as sess:
+            async with sess.post(
+                f"{BASE_URL}/generate_key",
+                json={"name": "CLI_User", "daily_limit": 10000},
+                timeout=aiohttp.ClientTimeout(total=10)
             ) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    new_key = data.get("key")
-                    if new_key:
-                        # Сохраняем в .env
-                        env_path = os.path.join(os.path.dirname(__file__), ".env")
-                        env_content = ""
-                        if os.path.exists(env_path):
-                            with open(env_path, "r") as f:
-                                env_content = f.read()
-                        if "API_KEY=" in env_content:
-                            lines = env_content.splitlines()
-                            new_lines = []
-                            for line in lines:
-                                if line.startswith("API_KEY="):
-                                    new_lines.append(f"API_KEY={new_key}")
-                                else:
-                                    new_lines.append(line)
-                            env_content = "\n".join(new_lines)
-                        else:
-                            env_content += f"\nAPI_KEY={new_key}\n"
-                        with open(env_path, "w") as f:
-                            f.write(env_content)
-                        API_KEY = new_key
-                        _ok(f"API ключ успешно создан и сохранён в .env")
+                    key = data.get("key", "")
+                    if key:
+                        _save_env_key(key)
+                        _ok(f"API ключ создан и сохранён в .env")
                         return
-        _err("Не удалось создать API ключ. Проверьте доступность сервера.")
-        # Предложим ввести вручную
-        choice = await _ask("Ввести API-ключ вручную? (y/n)", "n")
-        if choice.lower() == "y":
-            key = await _ask("Введите API-ключ")
-            if key:
-                env_path = os.path.join(os.path.dirname(__file__), ".env")
-                env_content = ""
-                if os.path.exists(env_path):
-                    with open(env_path, "r") as f:
-                        env_content = f.read()
-                if "API_KEY=" in env_content:
-                    lines = env_content.splitlines()
-                    new_lines = []
-                    for line in lines:
-                        if line.startswith("API_KEY="):
-                            new_lines.append(f"API_KEY={key}")
-                        else:
-                            new_lines.append(line)
-                    env_content = "\n".join(new_lines)
-                else:
-                    env_content += f"\nAPI_KEY={key}\n"
-                with open(env_path, "w") as f:
-                    f.write(env_content)
-                API_KEY = key
-                _ok("Ключ сохранён в .env")
+        _err("Сервер BrawlNest недоступен. Некоторые функции будут ограничены.")
     except Exception as e:
-        _err(f"Ошибка при генерации ключа: {e}")
-        _info("Возможно, сервер недоступен. Вы можете ввести ключ вручную позже через меню '🔑 Ввести API-ключ'.")
+        _err(f"Не удалось подключиться к {BASE_URL}: {e}")
 
-async def input_api_key():
-    """Запрашивает API-ключ у пользователя и сохраняет в .env."""
-    print()
-    _info("Для доступа к живому API Brawl Stars нужны ключи.")
-    _info("Вы можете получить ключи на https://developer.brawlstars.com")
-    key = await _ask("Введите один API-ключ (или несколько через запятую)")
+    console.print()
+    choice = await _ask("Введите API-ключ вручную (или Enter чтобы пропустить)", "")
+    if choice:
+        _save_env_key(choice)
+        _ok("Ключ сохранён")
+
+
+async def input_api_key_manual():
+    key = await _ask("Введите BrawlNest API-ключ (или ключи Brawl Stars через запятую для прямого доступа)", "")
     if not key:
         return
-    # Читаем существующий .env
-    env_path = os.path.join(os.path.dirname(__file__), ".env")
-    env_content = ""
-    if os.path.exists(env_path):
-        with open(env_path, "r") as f:
-            env_content = f.read()
-    # Обновляем или добавляем API_KEYS
-    if "API_KEYS=" in env_content:
-        lines = env_content.splitlines()
-        new_lines = []
-        for line in lines:
-            if line.startswith("API_KEYS="):
-                new_lines.append(f"API_KEYS={key}")
-            else:
-                new_lines.append(line)
-        env_content = "\n".join(new_lines)
+    if len(key) > 20:  # BrawlNest key (long random string)
+        _save_env_key(key)
+        _ok("BrawlNest API ключ сохранён. Перезапустите программу.")
     else:
-        env_content += f"\nAPI_KEYS={key}\n"
-    with open(env_path, "w") as f:
-        f.write(env_content)
-    _ok("Ключ сохранён в .env. Пожалуйста, перезапустите программу, чтобы изменения вступили в силу.")
-    console.print()
-    sys.exit(0)
+        # probably Brawl Stars key
+        env_path = os.path.join(os.path.dirname(__file__), ".env")
+        content = ""
+        if os.path.exists(env_path):
+            with open(env_path) as f:
+                content = f.read()
+        lines = [l for l in content.splitlines() if not l.startswith("API_KEYS=")]
+        lines.append(f"API_KEYS={key}")
+        with open(env_path, "w") as f:
+            f.write("\n".join(lines) + "\n")
+        _ok("Ключ Brawl Stars сохранён. Перезапустите программу.")
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# Проверка API ключей
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
+# Rating helpers
+# ═══════════════════════════════════════════════════════════════════
 
-async def check_api_keys():
-    if not HAS_API_KEYS:
-        _err("❌ API ключи отсутствуют. Добавьте их в .env файл.")
+async def _add_rating(action_type: str, object_id: Optional[str] = None):
+    if not API_KEY:
         return
-    with console.status("[dim]Проверка ключей...[/dim]", spinner="dots"):
-        data = await api.get_brawlers()
-    if data and "items" in data:
-        _ok(f"✅ Ключи работают! Найдено {len(data['items'])} бравлеров")
-    else:
-        last_status = api.last_status
-        if last_status == 403:
-            _err("❌ Ключи недействительны или истекли")
-        elif last_status == 429:
-            _err("⚠️ Превышен лимит запросов, подождите")
-        else:
-            _err("❓ Не удалось проверить ключи")
-    console.print()
+    try:
+        async with aiohttp.ClientSession() as sess:
+            async with sess.post(
+                f"{BASE_URL}/rating/add",
+                headers={"X-API-Key": API_KEY},
+                json={"action_type": action_type, "object_id": object_id},
+                timeout=aiohttp.ClientTimeout(total=5)
+            ) as r:
+                pass
+    except Exception:
+        pass
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# Профиль игрока и другие основные функции (с проверкой наличия ключей)
-# ═════════════════════════════════════════════════════════════════════════════
+async def _get_rating() -> int:
+    data = await _nest_get("/rating/my")
+    return (data or {}).get("rating", 0)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# PLAYERS
+# ═══════════════════════════════════════════════════════════════════
 
 async def show_player(tag: str, force_update: bool = False):
     data = None
-    if HAS_API_KEYS:
-        normalized_tag = api.normalize_tag(tag)
-        with console.status(f"[dim]Загрузка {normalized_tag}...[/dim]", spinner="dots"):
-            data = await player_col.collect(normalized_tag, force_update=force_update)
-        if not data:
-            # Попробуем загрузить из GitHub
-            data = await get_player_from_github(tag)
-            if data:
-                _info(f"⚠️ Игрок загружен из GitHub (устаревшие данные).")
-    else:
-        # Нет ключей — сразу идём в GitHub
-        data = await get_player_from_github(tag)
+    tag_clean = tag.strip().upper().lstrip("#")
+
+    # 1. BrawlNest REST API
+    data = await _nest_get(f"/player/{tag_clean}")
+
+    # 2. Direct Brawl API (if available and REST failed)
+    if not data and HAS_BRAWL_KEYS and player_col:
+        with console.status(f"[dim]Загрузка из Brawl API...[/dim]", spinner="dots"):
+            data = await player_col.collect(tag_clean, force_update=force_update)
 
     if not data:
-        _err(f"❌ Игрок {tag} не найден (ни в API, ни в GitHub).")
-        _info("Возможно, вы хотите добавить API-ключ для получения свежих данных?")
-        choice = await _ask("Ввести API-ключ сейчас? (y/n)", "n")
-        if choice.lower() == "y":
-            await input_api_key()
+        _err(f"Игрок {tag_clean} не найден")
+        await _press_enter_to_continue()
         return
 
-    name = data['name']
-    player_tag = f"#{data['tag'].lstrip('#')}"
-    trophies = data['trophies']
-    highest = data.get('highest_trophies', '?')
-    exp_level = data.get('exp_level', '?')
-    exp_points = data.get('exp_points', 0)
-    wins_3v3 = data.get('wins_3v3', 0)
-    wins_solo = data.get('wins_solo', 0)
-    wins_duo = data.get('wins_duo', 0)
-    club = data.get('club_tag')
-    club_display = f"#{club.lstrip('#')}" if club else "[dim]—[/dim]"
-
-    stats_table = Table(show_header=False, box=box.SIMPLE, padding=(0, 1))
-    stats_table.add_column(style="bold #f97316", width=18)
-    stats_table.add_column(style="white")
-
-    stats_table.add_row("🏆 Трофеи", f"{trophies} [dim](макс {highest})[/dim]")
-    stats_table.add_row("⭐ Уровень", f"{exp_level} [dim]({exp_points} XP)[/dim]")
-    stats_table.add_row("🥇 Победы 3x3", str(wins_3v3))
-    stats_table.add_row("🌵 Победы соло", str(wins_solo))
-    stats_table.add_row("👥 Победы дуо", str(wins_duo))
-    stats_table.add_row("🏠 Клуб", club_display)
-
-    panel = Panel(
-        stats_table,
-        title=f"[bold cyan]{name}[/bold cyan] [dim]{player_tag}[/dim]",
-        border_style="bright_blue",
-        box=box.ROUNDED,
-        padding=(0, 1)
-    )
-    console.print(panel)
-    console.print()
-    await _add_rating_remote("player_view", tag)
-
-
-async def show_battles(tag: str, limit: int = 10):
-    battles = []
-    if HAS_API_KEYS:
-        with console.status(f"[dim]Загрузка боёв {tag}...[/dim]", spinner="dots"):
-            await player_col.collect(tag)
-            battles = await db.get_battles(tag.replace("#", ""), limit=limit)
+    name     = data.get("name", "?")
+    p_tag    = f"#{data.get('tag','').lstrip('#')}"
+    trophies = data.get("trophies", 0)
+    highest  = data.get("highestTrophies") or data.get("highest_trophies", "?")
+    exp_lvl  = data.get("expLevel") or data.get("exp_level", "?")
+    exp_pts  = data.get("expPoints") or data.get("exp_points", 0)
+    w3       = data.get("3vs3Victories") or data.get("wins_3v3", 0)
+    wsolo    = data.get("soloVictories") or data.get("wins_solo", 0)
+    wduo     = data.get("duoVictories") or data.get("wins_duo", 0)
+    club     = (data.get("club") or {})
+    if isinstance(club, dict):
+        club_tag = club.get("tag", "") or data.get("club_tag", "")
     else:
-        player_data = await get_player_from_github(tag)
-        if player_data and player_data.get("battles"):
-            battles = player_data.get("battles")[:limit]
-            _info("⚠️ Бои загружены из GitHub (могут быть неактуальны).")
+        club_tag = data.get("club_tag", "")
+    club_disp = f"#{club_tag.lstrip('#')}" if club_tag else "[dim]—[/dim]"
 
-    if not battles:
-        _err("❌ Боевой лог пуст или игрок не найден")
-        if not HAS_API_KEYS:
-            _info("Попробуйте добавить API-ключ для получения актуальных данных.")
-            choice = await _ask("Ввести API-ключ сейчас? (y/n)", "n")
-            if choice.lower() == "y":
-                await input_api_key()
-        return
-
+    t = Table(show_header=False, box=box.SIMPLE, padding=(0, 1))
+    t.add_column(style="bold #f97316", width=20)
+    t.add_column(style="white")
+    t.add_row("🏆 Трофеи",     f"{trophies} [dim](макс {highest})[/dim]")
+    t.add_row("⭐ Уровень",    f"{exp_lvl} [dim]({exp_pts} XP)[/dim]")
+    t.add_row("🥇 Победы 3x3", str(w3))
+    t.add_row("🌵 Соло",       str(wsolo))
+    t.add_row("👥 Дуо",        str(wduo))
+    t.add_row("🏠 Клуб",       club_disp)
+    console.print(Panel(t, title=f"[bold cyan]{name}[/bold cyan] [dim]{p_tag}[/dim]",
+                         border_style="bright_blue", box=box.ROUNDED, padding=(0, 1)))
     console.print()
-    _hr(f"📜 Последние бои · {tag}")
-    table = Table(box=box.MINIMAL, show_header=True,
-                  header_style="dim #9ca3af", padding=(0, 2))
-    table.add_column("Время", style="dim", min_width=16)
-    table.add_column("Режим", min_width=24)
-    table.add_column("Карта", style="dim", min_width=20)
-    table.add_column("Результат", min_width=12)
-    table.add_column("Δ", justify="right", min_width=5)
+    await _add_rating("player_view", tag_clean)
+    await _press_enter_to_continue()
 
-    for b in battles:
-        bt = (b.get("battle_time") or "")[:16]
-        raw_mode = b.get("battle_mode") or "?"
-        result = b.get("result") or "?"
-        tch = b.get("trophies_change")
-        map_name = ""
-        if b.get("raw_data"):
-            try:
-                map_name = json.loads(b["raw_data"]).get("event", {}).get("map", "") or ""
-            except Exception:
-                pass
 
-        res_str = (
-            "[#4ade80]✔ Победа[/#4ade80]" if result == "victory" else
-            "[#f87171]✘ Поражение[/#f87171]" if result == "defeat" else
-            f"[dim]{result}[/dim]"
-        )
-        tch_str = (
-            f"[#4ade80]+{tch}[/#4ade80]" if tch and tch > 0 else
-            f"[#f87171]{tch}[/#f87171]" if tch and tch < 0 else
-            "[dim]—[/dim]"
-        )
-        map_name_translated = MAP_TRANSLATIONS.get(map_name, map_name)
-        table.add_row(bt, MODE_NAMES.get(raw_mode, raw_mode), map_name_translated, res_str, tch_str)
-
-    console.print(table)
+async def show_player_history(tag: str, days: int = 30):
+    tag_clean = tag.strip().upper().lstrip("#")
+    data = await _nest_get(f"/player/{tag_clean}/history", {"days": days})
+    if not data or not data.get("history"):
+        _err("История трофеев не найдена")
+        await _press_enter_to_continue()
+        return
+    console.print()
+    _hr(f"📈 История трофеев · {tag_clean}")
+    t = Table(box=box.MINIMAL, show_header=True, header_style="dim #9ca3af", padding=(0, 2))
+    t.add_column("Дата", style="dim", min_width=12)
+    t.add_column("Трофеи", justify="right", min_width=8)
+    t.add_column("Изменение", justify="right", min_width=10)
+    prev = None
+    for entry in data["history"]:
+        tr = entry.get("trophies", 0)
+        delta = ""
+        if prev is not None:
+            diff = tr - prev
+            delta = (f"[#4ade80]+{diff}[/#4ade80]" if diff > 0
+                     else f"[#f87171]{diff}[/#f87171]" if diff < 0 else "[dim]0[/dim]")
+        t.add_row(str(entry.get("date", "?")), f"[#4ade80]{tr}[/#4ade80]", delta)
+        prev = tr
+    console.print(t)
     _hr()
     console.print()
-    await _add_rating_remote("battles_view", tag)
+    await _press_enter_to_continue()
 
+
+async def show_player_battles(tag: str, limit: int = 20):
+    tag_clean = tag.strip().upper().lstrip("#")
+    data = await _nest_get(f"/player/{tag_clean}/battles", {"limit": limit})
+    if not data:
+        _err("Бои не найдены")
+        await _press_enter_to_continue()
+        return
+    battles = data.get("battles", [])
+    if not battles:
+        _info("Боевой лог пуст")
+        await _press_enter_to_continue()
+        return
+    console.print()
+    _hr(f"📜 Бои · {tag_clean}")
+    t = Table(box=box.MINIMAL, show_header=True, header_style="dim #9ca3af", padding=(0, 2))
+    t.add_column("Время", style="dim", min_width=16)
+    t.add_column("Режим", min_width=22)
+    t.add_column("Карта", style="dim", min_width=20)
+    t.add_column("Результат", min_width=14)
+    t.add_column("Δ", justify="right", min_width=5)
+    for b in battles:
+        bt   = str(b.get("battle_time", ""))[:16]
+        mode = b.get("game_mode") or b.get("battle_type", "?")
+        mname= MODE_NAMES.get(mode, mode)
+        mmap = MAP_TRANS.get(b.get("map_name", ""), b.get("map_name", ""))
+        res  = b.get("result", "?")
+        tch  = b.get("trophies_change")
+        res_s= ("[#4ade80]✔ Победа[/#4ade80]" if res == "victory"
+                else "[#f87171]✘ Поражение[/#f87171]" if res == "defeat"
+                else f"[dim]{res}[/dim]")
+        tch_s= (f"[#4ade80]+{tch}[/#4ade80]" if tch and tch > 0
+                else f"[#f87171]{tch}[/#f87171]" if tch and tch < 0 else "[dim]—[/dim]")
+        t.add_row(bt, mname, mmap, res_s, tch_s)
+    console.print(t)
+    _hr()
+    console.print()
+    await _add_rating("battles_view", tag_clean)
+    await _press_enter_to_continue()
+
+
+async def show_player_battles_stats(tag: str):
+    tag_clean = tag.strip().upper().lstrip("#")
+    data = await _nest_get(f"/player/{tag_clean}/battles/stats")
+    if not data:
+        _err("Статистика боёв не найдена")
+        await _press_enter_to_continue()
+        return
+    console.print()
+    _hr(f"📊 Статистика боёв · {tag_clean}")
+    _kv("Всего боёв", str(data.get("total_battles", 0)))
+    _kv("Побед",      str(data.get("total_wins", 0)))
+    total = data.get("total_battles", 1)
+    wins  = data.get("total_wins", 0)
+    wr    = round(wins / total * 100, 1) if total else 0
+    _kv("Винрейт",    f"{wr}%")
+    by_mode = data.get("by_mode", [])
+    if by_mode:
+        console.print()
+        _hr("По режимам")
+        t = Table(box=box.MINIMAL, header_style="dim #9ca3af", padding=(0, 2))
+        t.add_column("Режим", min_width=22)
+        t.add_column("Боёв", justify="right")
+        t.add_column("Побед", justify="right")
+        for m in by_mode:
+            t.add_row(MODE_NAMES.get(m.get("game_mode", ""), m.get("game_mode", "?")),
+                      str(m.get("total", 0)), str(m.get("wins", 0)))
+        console.print(t)
+    _hr()
+    console.print()
+    await _press_enter_to_continue()
+
+
+async def show_player_brawlers(tag: str):
+    tag_clean = tag.strip().upper().lstrip("#")
+    data = await _nest_get(f"/player/{tag_clean}/brawlers")
+    if not data:
+        _err("Данные о бравлерах не найдены")
+        await _press_enter_to_continue()
+        return
+    brawlers = data.get("brawlers", [])
+    if not brawlers:
+        _info("Список бравлеров пуст")
+        await _press_enter_to_continue()
+        return
+    console.print()
+    _hr(f"🤖 Бравлеры · {tag_clean}")
+    t = Table(box=box.MINIMAL, header_style="dim #9ca3af", padding=(0, 2))
+    t.add_column("Имя", min_width=18)
+    t.add_column("Трофеи", justify="right")
+    t.add_column("Макс", justify="right")
+    t.add_column("Сила", justify="right")
+    t.add_column("Ранг", justify="right")
+    for b in sorted(brawlers, key=lambda x: x.get("trophies", 0), reverse=True):
+        t.add_row(
+            b.get("brawler_name", "?"),
+            f"[#4ade80]{b.get('trophies', 0)}[/#4ade80]",
+            str(b.get("highest_trophies", 0)),
+            str(b.get("power", 1)),
+            str(b.get("rank", 1)),
+        )
+    console.print(t)
+    _hr()
+    console.print()
+    await _add_rating("brawlers_view", tag_clean)
+    await _press_enter_to_continue()
+
+
+async def show_player_mastery(tag: str):
+    tag_clean = tag.strip().upper().lstrip("#")
+    data = await _nest_get(f"/player/{tag_clean}/mastery")
+    if not data:
+        _err("Мастерство не найдено")
+        await _press_enter_to_continue()
+        return
+    mastery = data.get("mastery", [])
+    if not mastery:
+        _info("Нет данных мастерства (требуется официальный API)")
+        await _press_enter_to_continue()
+        return
+    console.print()
+    _hr(f"⭐ Мастерство бравлеров · {tag_clean}")
+    t = Table(box=box.MINIMAL, header_style="dim #9ca3af", padding=(0, 2))
+    t.add_column("ID бравлера", style="dim")
+    t.add_column("Уровень мастерства")
+    t.add_column("Очки мастерства", justify="right")
+    for m in mastery:
+        t.add_row(str(m.get("brawler_id", "?")),
+                  str(m.get("mastery_level", "?")),
+                  f"[#facc15]{m.get('mastery_points', 0)}[/#facc15]")
+    console.print(t)
+    _hr()
+    console.print()
+    await _press_enter_to_continue()
+
+
+async def compare_players():
+    tags_raw = await _ask("Теги игроков через запятую (2-3 игрока)")
+    if not tags_raw:
+        return
+    tags = [t.strip().upper().lstrip("#") for t in tags_raw.split(",") if t.strip()]
+    if len(tags) < 2:
+        _err("Нужно минимум 2 тега")
+        await _press_enter_to_continue()
+        return
+    data = await _nest_get("/compare/players", {"tags": ",".join(tags)})
+    if not data or not data.get("players"):
+        _err("Не удалось сравнить игроков")
+        await _press_enter_to_continue()
+        return
+    console.print()
+    _hr("⚔️ Сравнение игроков")
+    t = Table(box=box.MINIMAL, header_style="dim #9ca3af", padding=(0, 2))
+    t.add_column("Показатель", style="dim", min_width=18)
+    players = data["players"]
+    for p in players:
+        t.add_column(p.get("name", "?"), justify="right", min_width=12)
+    fields = [
+        ("trophies", "🏆 Трофеи"),
+        ("highestTrophies", "📈 Макс трофеев"),
+        ("expLevel", "⭐ Уровень"),
+        ("3vs3Victories", "🥇 Победы 3x3"),
+        ("soloVictories", "🌵 Победы соло"),
+        ("duoVictories", "👥 Победы дуо"),
+    ]
+    for field, label in fields:
+        row = [label]
+        best = max((p.get(field, 0) or 0 for p in players), default=0)
+        for p in players:
+            val = p.get(field, 0) or 0
+            row.append(f"[#4ade80]{val}[/#4ade80]" if val == best and best > 0 else str(val))
+        t.add_row(*row)
+    console.print(t)
+    _hr()
+    console.print()
+    await _press_enter_to_continue()
+
+
+# ═══════════════════════════════════════════════════════════════════
+# CLUBS
+# ═══════════════════════════════════════════════════════════════════
 
 async def show_club(tag: str, show_members: bool = False):
-    data = None
-    if HAS_API_KEYS:
-        with console.status(f"[dim]Загрузка клуба {tag}...[/dim]", spinner="dots"):
-            data = await club_col.collect(tag)
-        if not data:
-            data = await get_club_from_github(tag)
-            if data:
-                _info("⚠️ Клуб загружен из GitHub (устаревшие данные).")
-    else:
-        data = await get_club_from_github(tag)
-
+    tag_clean = tag.strip().upper().lstrip("#")
+    data = await _nest_get(f"/club/{tag_clean}")
+    if not data and HAS_BRAWL_KEYS and club_col:
+        with console.status("[dim]Загрузка клуба...[/dim]", spinner="dots"):
+            data = await club_col.collect(tag_clean)
     if not data:
-        _err(f"❌ Клуб {tag} не найден (ни в API, ни в GitHub).")
-        choice = await _ask("Ввести API-ключ сейчас? (y/n)", "n")
-        if choice.lower() == "y":
-            await input_api_key()
+        _err(f"Клуб {tag_clean} не найден")
+        await _press_enter_to_continue()
         return
-
     console.print()
-    _hr(f"🏢 {data['name']} [dim]#{data['tag'].lstrip('#')}[/dim]")
-    _kv("🏆 Трофеи", str(data.get("trophies", 0)), "dim", "#4ade80")
-    _kv("📜 Требуется", str(data.get("required_trophies", "?")), "dim", "white")
-    _kv("👥 Участников", str(data.get("members_count", "?")), "dim", "white")
-    _kv("🏷️ Тип", str(data.get("type", "?")), "dim", "white")
+    name = data.get("name", "?")
+    ctag = f"#{data.get('tag','').lstrip('#')}"
+    _hr(f"🏢 {name} {ctag}")
+    _kv("🏆 Трофеи",      str(data.get("trophies", 0)), "dim", "#4ade80")
+    _kv("📜 Треб. трофеев", str(data.get("requiredTrophies") or data.get("required_trophies", "?")))
+    _kv("👥 Участников",   str(data.get("membersCount") or data.get("members_count", "?")))
+    _kv("🏷️ Тип",          str(data.get("type", "?")))
     if data.get("description"):
-        _kv("📝 Описание", data["description"].strip(), "dim", "dim white")
+        _kv("📝 Описание",  data["description"][:80])
     _hr()
     console.print()
 
     if show_members:
-        members = await db.get_club_members(data["tag"])
+        members = data.get("members", [])
+        if not members and db:
+            members = await db.get_club_members(tag_clean)
         if members:
             _hr(f"👥 Участники ({len(members)})")
-            table = Table(box=box.MINIMAL, show_header=True,
-                          header_style="dim #9ca3af", padding=(0, 2))
-            table.add_column("#", justify="right", style="dim", min_width=3)
-            table.add_column("Имя", min_width=18)
-            table.add_column("Тег", style="#67e8f9", min_width=12)
-            table.add_column("Роль", style="dim", min_width=10)
-            table.add_column("🏆", justify="right", min_width=8)
+            t = Table(box=box.MINIMAL, header_style="dim #9ca3af", padding=(0, 2))
+            t.add_column("#", justify="right", style="dim", min_width=3)
+            t.add_column("Имя", min_width=18)
+            t.add_column("Тег", style="#67e8f9", min_width=12)
+            t.add_column("Роль", style="dim", min_width=12)
+            t.add_column("🏆", justify="right", min_width=8)
             for i, m in enumerate(members, 1):
-                table.add_row(
-                    str(i), m["name"], m["player_tag"],
-                    m.get("role") or "—",
-                    f"[#4ade80]{m['trophies']}[/#4ade80]",
-                )
-            console.print(table)
+                mtag = m.get("tag") or m.get("player_tag", "?")
+                t.add_row(str(i), m.get("name","?"), mtag,
+                           m.get("role","—"), f"[#4ade80]{m.get('trophies',0)}[/#4ade80]")
+            console.print(t)
             _hr()
             console.print()
-    await _add_rating_remote("club_view", tag)
+    await _add_rating("club_view", tag_clean)
+    await _press_enter_to_continue()
 
+
+async def show_club_history(tag: str, days: int = 30):
+    tag_clean = tag.strip().upper().lstrip("#")
+    data = await _nest_get(f"/club/{tag_clean}/history", {"days": days})
+    if not data or not data.get("history"):
+        _err("История клуба не найдена")
+        await _press_enter_to_continue()
+        return
+    console.print()
+    _hr(f"📈 История клуба · {tag_clean}")
+    t = Table(box=box.MINIMAL, header_style="dim #9ca3af", padding=(0, 2))
+    t.add_column("Дата", style="dim")
+    t.add_column("Трофеи", justify="right")
+    t.add_column("Участников", justify="right")
+    t.add_column("Треб.", justify="right")
+    for e in data["history"]:
+        t.add_row(str(e.get("date","?")),
+                  f"[#4ade80]{e.get('trophies',0)}[/#4ade80]",
+                  str(e.get("member_count","?")),
+                  str(e.get("required_trophies","?")))
+    console.print(t)
+    _hr()
+    console.print()
+    await _press_enter_to_continue()
+
+
+# ═══════════════════════════════════════════════════════════════════
+# SEARCH
+# ═══════════════════════════════════════════════════════════════════
+
+async def search_players_by_name():
+    name = await _ask("Имя игрока (часть)")
+    if not name:
+        return
+    data = await _nest_get("/search/players", {"name": name, "limit": 50})
+    results = (data or {}).get("results", [])
+    if not results and db:
+        results = await db.search_players_by_name(name, limit=50)
+    if not results:
+        _err(f"Игроки с именем '{name}' не найдены")
+        await _press_enter_to_continue()
+        return
+    console.print()
+    _hr(f"🔍 Поиск игроков: {name}")
+    t = Table(box=box.MINIMAL, header_style="dim #9ca3af", padding=(0, 2))
+    t.add_column("#", justify="right", style="dim", min_width=3)
+    t.add_column("Тег", style="#67e8f9", min_width=12)
+    t.add_column("Имя", min_width=20)
+    t.add_column("Трофеи", justify="right")
+    for i, p in enumerate(results[:30], 1):
+        t.add_row(str(i), p.get("tag","?"), p.get("name","?"),
+                   f"[#4ade80]{p.get('trophies',0)}[/#4ade80]")
+    console.print(t)
+    _hr()
+    console.print()
+    await _add_rating("search_name", name)
+    await _press_enter_to_continue()
+
+
+async def search_clubs_by_name():
+    name = await _ask("Название клуба (часть)")
+    if not name:
+        return
+    data = await _nest_get("/search/clubs", {"name": name, "limit": 30})
+    results = (data or {}).get("results", [])
+    if not results and db:
+        results = await db.search_clubs_by_name(name, limit=30)
+    if not results:
+        _err(f"Клубы с названием '{name}' не найдены")
+        await _press_enter_to_continue()
+        return
+    console.print()
+    _hr(f"🔍 Поиск клубов: {name}")
+    t = Table(box=box.MINIMAL, header_style="dim #9ca3af", padding=(0, 2))
+    t.add_column("#", justify="right", style="dim", min_width=3)
+    t.add_column("Тег", style="#67e8f9", min_width=12)
+    t.add_column("Название", min_width=20)
+    t.add_column("Трофеи", justify="right")
+    t.add_column("Участников", justify="right")
+    for i, c in enumerate(results, 1):
+        t.add_row(str(i), c.get("tag","?"), c.get("name","?"),
+                   f"[#4ade80]{c.get('trophies',0)}[/#4ade80]",
+                   str(c.get("members_count", c.get("membersCount",0))))
+    console.print(t)
+    _hr()
+    console.print()
+    await _add_rating("search_club_name", name)
+    await _press_enter_to_continue()
+
+
+async def advanced_search_menu():
+    query = await _ask("Поисковый запрос")
+    if not query:
+        return
+    stype = await _ask("Тип поиска (players/clubs) [players]", "players")
+    sort  = await _ask("Сортировать по (trophies/name) [trophies]", "trophies")
+    order = await _ask("Порядок (asc/desc) [desc]", "desc")
+    limit = await _ask_int("Количество результатов", 20)
+    data  = await _nest_get("/search/advanced", {
+        "query": query, "type": stype, "sort_by": sort, "order": order, "limit": limit
+    })
+    if not data or not data.get("results"):
+        _err("Ничего не найдено")
+        await _press_enter_to_continue()
+        return
+    console.print()
+    _hr(f"🔍 Расширенный поиск: {query}")
+    t = Table(box=box.MINIMAL, header_style="dim #9ca3af", padding=(0, 2))
+    t.add_column("#", justify="right", style="dim")
+    t.add_column("Тег", style="#67e8f9")
+    t.add_column("Имя", min_width=20)
+    t.add_column("Трофеи", justify="right")
+    for i, r in enumerate(data["results"], 1):
+        t.add_row(str(i), r.get("tag","?"), r.get("name","?"),
+                   f"[#4ade80]{r.get('trophies',0)}[/#4ade80]")
+    console.print(t)
+    _hr()
+    console.print()
+    await _press_enter_to_continue()
+
+
+# ═══════════════════════════════════════════════════════════════════
+# MAPS & TEAMS
+# ═══════════════════════════════════════════════════════════════════
+
+async def show_maps(limit: int = 30):
+    data = await _nest_get("/maps", {"limit": limit})
+    if not data or not data.get("maps"):
+        _err("Статистика карт недоступна (нужны данные о боях)")
+        await _press_enter_to_continue()
+        return
+    console.print()
+    _hr("🗺️ Статистика карт")
+    t = Table(box=box.MINIMAL, header_style="dim #9ca3af", padding=(0, 2))
+    t.add_column("Карта", min_width=22)
+    t.add_column("Режим", min_width=18)
+    t.add_column("Боёв", justify="right")
+    t.add_column("Побед", justify="right")
+    t.add_column("Винрейт", justify="right")
+    for m in data["maps"]:
+        wr = m.get("win_rate", 0)
+        t.add_row(
+            MAP_TRANS.get(m.get("map_name","?"), m.get("map_name","?")),
+            m.get("game_mode","?"),
+            str(m.get("total_battles",0)),
+            str(m.get("total_wins",0)),
+            f"[#4ade80]{wr:.1f}%[/#4ade80]" if wr >= 50 else f"[#f87171]{wr:.1f}%[/#f87171]",
+        )
+    console.print(t)
+    _hr()
+    console.print()
+    await _add_rating("rotation_view")
+    await _press_enter_to_continue()
+
+
+async def show_map_stats():
+    map_name = await _ask("Название карты (на английском)")
+    if not map_name:
+        return
+    data = await _nest_get(f"/maps/{map_name}")
+    if not data:
+        _err(f"Статистика для '{map_name}' не найдена")
+        await _press_enter_to_continue()
+        return
+    console.print()
+    _hr(f"🗺️ {MAP_TRANS.get(map_name, map_name)}")
+    stats = data.get("stats", data)
+    _kv("Всего боёв",    str(stats.get("total_battles", 0)))
+    _kv("Побед",         str(stats.get("total_wins", 0)))
+    _kv("Винрейт",       f"{stats.get('win_rate', 0):.1f}%")
+    _kv("Ср. изм. трофеев", f"{stats.get('avg_trophies_change', 0):.1f}")
+    _hr()
+    console.print()
+    await _press_enter_to_continue()
+
+
+async def show_team_stats():
+    tags_raw = await _ask("Теги игроков через запятую (2-3)")
+    if not tags_raw:
+        return
+    tags = [t.strip() for t in tags_raw.split(",") if t.strip()]
+    if not (2 <= len(tags) <= 3):
+        _err("Нужно 2-3 тега")
+        await _press_enter_to_continue()
+        return
+    data = await _nest_get("/team/stats", {"tags": ",".join(tags)})
+    if not data or data.get("total_battles", 0) == 0:
+        _info("Нет данных о командной игре для этих игроков")
+        await _press_enter_to_continue()
+        return
+    console.print()
+    _hr("🎮 Статистика команды")
+    _kv("Боёв вместе", str(data.get("total_battles", 0)))
+    _kv("Побед",       str(data.get("total_wins", 0)))
+    _kv("Винрейт",     f"{data.get('win_rate', 0):.1f}%")
+    if data.get("last_updated"):
+        _kv("Обновлено", str(data["last_updated"])[:19])
+    _hr()
+    console.print()
+    await _add_rating("check_team")
+    await _press_enter_to_continue()
+
+
+# ═══════════════════════════════════════════════════════════════════
+# RANKINGS
+# ═══════════════════════════════════════════════════════════════════
+
+async def show_rankings_players(limit: int = 20):
+    data = await _nest_get("/rankings/players", {"limit": limit})
+    if not data or not data.get("players"):
+        # fallback to direct API
+        if HAS_BRAWL_KEYS and api:
+            data2 = await api.get_rankings_players()
+            if data2 and "items" in data2:
+                console.print()
+                _hr("🏆 Топ игроков (Brawl Stars global)")
+                t = Table(box=box.MINIMAL, header_style="dim #9ca3af", padding=(0, 2))
+                t.add_column("#", justify="right", style="dim")
+                t.add_column("Имя")
+                t.add_column("Тег", style="#67e8f9")
+                t.add_column("Трофеи", justify="right")
+                for i, p in enumerate(data2["items"][:limit], 1):
+                    t.add_row(str(i), p.get("name","?"), p.get("tag","?"),
+                               f"[#4ade80]{p.get('trophies',0)}[/#4ade80]")
+                console.print(t); _hr(); console.print()
+                await _press_enter_to_continue()
+                return
+        _err("Данные рейтинга недоступны")
+        await _press_enter_to_continue()
+        return
+    console.print()
+    _hr("🏆 Топ игроков (BrawlNest)")
+    t = Table(box=box.MINIMAL, header_style="dim #9ca3af", padding=(0, 2))
+    t.add_column("#", justify="right", style="dim")
+    t.add_column("Тег", style="#67e8f9")
+    t.add_column("Трофеи", justify="right")
+    t.add_column("Дата", style="dim")
+    for i, p in enumerate(data["players"], 1):
+        t.add_row(str(i), p.get("player_tag", p.get("tag", "?")),
+                   f"[#4ade80]{p.get('trophies',0)}[/#4ade80]",
+                   str(p.get("date", ""))[:10])
+    console.print(t); _hr(); console.print()
+    await _add_rating("rankings_view")
+    await _press_enter_to_continue()
+
+
+async def show_rankings_clubs(limit: int = 20):
+    data = await _nest_get("/rankings/clubs", {"limit": limit})
+    if not data or not data.get("clubs"):
+        if HAS_BRAWL_KEYS and api:
+            data2 = await api.get_rankings_clubs()
+            if data2 and "items" in data2:
+                console.print()
+                _hr("🏅 Топ клубов (Brawl Stars global)")
+                t = Table(box=box.MINIMAL, header_style="dim #9ca3af", padding=(0, 2))
+                t.add_column("#", justify="right", style="dim")
+                t.add_column("Название")
+                t.add_column("Тег", style="#67e8f9")
+                t.add_column("Трофеи", justify="right")
+                t.add_column("Участников", justify="right")
+                for i, c in enumerate(data2["items"][:limit], 1):
+                    t.add_row(str(i), c.get("name","?"), c.get("tag","?"),
+                               f"[#4ade80]{c.get('trophies',0)}[/#4ade80]",
+                               str(c.get("memberCount", 0)))
+                console.print(t); _hr(); console.print()
+                await _press_enter_to_continue()
+                return
+        _err("Данные рейтинга клубов недоступны")
+        await _press_enter_to_continue()
+        return
+    console.print()
+    _hr("🏅 Топ клубов (BrawlNest)")
+    t = Table(box=box.MINIMAL, header_style="dim #9ca3af", padding=(0, 2))
+    t.add_column("#", justify="right", style="dim")
+    t.add_column("Название")
+    t.add_column("Тег", style="#67e8f9")
+    t.add_column("Трофеи", justify="right")
+    for i, c in enumerate(data["clubs"], 1):
+        t.add_row(str(i), c.get("name","?"), c.get("tag","?"),
+                   f"[#4ade80]{c.get('trophies',0)}[/#4ade80]")
+    console.print(t); _hr(); console.print()
+    await _add_rating("rankings_view")
+    await _press_enter_to_continue()
+
+
+# ═══════════════════════════════════════════════════════════════════
+# BRAWLERS
+# ═══════════════════════════════════════════════════════════════════
 
 async def show_brawlers():
-    if not HAS_API_KEYS:
-        _err("❌ Нет API ключей. Невозможно получить список бравлеров.")
-        return
-    with console.status("[dim]Загрузка бравлеров...[/dim]", spinner="dots"):
-        data = await api.get_brawlers()
-    if not data or "items" not in data:
-        _err("❌ Не удалось загрузить бравлеров")
+    data = await _nest_get("/brawlers")
+    if not data or not data.get("brawlers"):
+        if HAS_BRAWL_KEYS and api:
+            data = await api.get_brawlers()
+            if data and "items" in data:
+                data = {"brawlers": [{"id": b["id"], "name": b["name"]} for b in data["items"]]}
+    if not data or not data.get("brawlers"):
+        _err("Список бравлеров недоступен")
+        await _press_enter_to_continue()
         return
     console.print()
-    _hr("🤖 Список бравлеров")
-    table = Table(box=box.MINIMAL, show_header=True,
-                  header_style="dim #9ca3af", padding=(0, 2))
-    table.add_column("ID", justify="right", style="dim", min_width=6)
-    table.add_column("Имя", min_width=20)
-    for b in data["items"]:
-        table.add_row(str(b.get("id", "?")), b.get("name", "?"))
-    console.print(table)
-    _hr()
-    console.print()
-    await _add_rating_remote("brawlers_view")
+    _hr("🤖 Бравлеры")
+    t = Table(box=box.MINIMAL, header_style="dim #9ca3af", padding=(0, 2))
+    t.add_column("ID", justify="right", style="dim", min_width=10)
+    t.add_column("Имя", min_width=20)
+    for b in data["brawlers"]:
+        t.add_row(str(b.get("id","?")), b.get("name","?"))
+    console.print(t); _hr(); console.print()
+    await _add_rating("brawlers_view")
+    await _press_enter_to_continue()
 
+
+async def show_brawler_rankings(brawler_id: Optional[int] = None):
+    if brawler_id is None:
+        brawler_id = await _ask_int("ID бравлера (например 16000000 = Shelly)", 16000000)
+    data = await _nest_get(f"/brawlers/{brawler_id}/rankings", {"limit": 20})
+    if not data or not data.get("rankings"):
+        _err("Рейтинг по бравлеру не найден")
+        await _press_enter_to_continue()
+        return
+    console.print()
+    _hr(f"🏆 Топ по бравлеру {brawler_id}")
+    t = Table(box=box.MINIMAL, header_style="dim #9ca3af", padding=(0, 2))
+    t.add_column("#", justify="right", style="dim")
+    t.add_column("Тег", style="#67e8f9")
+    t.add_column("Трофеи", justify="right")
+    for i, r in enumerate(data["rankings"], 1):
+        t.add_row(str(i), r.get("player_tag","?"), f"[#4ade80]{r.get('trophies',0)}[/#4ade80]")
+    console.print(t); _hr(); console.print()
+    await _press_enter_to_continue()
+
+
+# ═══════════════════════════════════════════════════════════════════
+# GAME CONTENT (direct Brawl API)
+# ═══════════════════════════════════════════════════════════════════
 
 async def show_event_rotation():
-    if not HAS_API_KEYS:
-        _err("❌ Нет API ключей. Невозможно получить ротацию.")
+    if not HAS_BRAWL_KEYS:
+        _err("Нет ключей Brawl Stars API. Добавьте API_KEYS в .env")
+        await _press_enter_to_continue()
+        return
+    if not api:
+        _err("API клиент не инициализирован")
+        await _press_enter_to_continue()
         return
     with console.status("[dim]Загрузка ротации...[/dim]", spinner="dots"):
         data = await api.get_event_rotation()
     if not data:
-        last_status = api.last_status
-        if last_status == 403:
-            _err("❌ Ошибка 403 — ключ недействителен или истёк")
-        elif last_status == 429:
-            _err("⚠️ Ошибка 429 — превышен лимит запросов, подождите")
-        elif last_status == 404:
-            _err("❌ Ротация событий не найдена (возможно, эндпоинт изменился)")
-        else:
-            _err("❌ Не удалось загрузить ротацию")
+        _err("Не удалось загрузить ротацию")
+        await _press_enter_to_continue()
         return
-
-    events = None
-    if isinstance(data, list):
-        events = data
-    elif isinstance(data, dict):
-        if "current" in data and "upcoming" in data:
-            events = data.get("current", []) + data.get("upcoming", [])
-        elif "items" in data:
-            events = data["items"]
-    if events is None:
-        _err("❌ Неверный формат ответа от API")
-        try:
-            sample = json.dumps(data)[:200]
-            _info(f"Получено: {sample}...")
-        except:
-            pass
-        return
-
+    events = data if isinstance(data, list) else data.get("active", data.get("items", []))
     if not events:
-        _err("❌ Нет активных событий")
+        _err("Нет активных событий")
+        await _press_enter_to_continue()
         return
-
     console.print()
-    _hr("🎡 Текущая ротация событий")
-    table = Table(box=box.MINIMAL, show_header=True,
-                  header_style="dim #9ca3af", padding=(0, 2))
-    table.add_column("Слот", justify="right", style="dim", min_width=5)
-    table.add_column("Режим", min_width=24)
-    table.add_column("Карта", style="dim", min_width=22)
-    table.add_column("До", style="dim", min_width=16)
-
+    _hr("🎡 Ротация событий")
+    t = Table(box=box.MINIMAL, header_style="dim #9ca3af", padding=(0, 2))
+    t.add_column("Слот", justify="right", style="dim")
+    t.add_column("Режим", min_width=22)
+    t.add_column("Карта", style="dim", min_width=20)
+    t.add_column("До", style="dim")
     for ev in events:
-        slot = ev.get("slotId", ev.get("slot", "?"))
-        event_info = ev.get("event", {})
-        mode = event_info.get("mode", ev.get("mode", "?"))
-        map_name = event_info.get("map", ev.get("map", "?"))
-        end_time = ev.get("endTime", "")
-
-        mode_name = MODE_NAMES.get(mode, mode)
-        map_name_translated = MAP_TRANSLATIONS.get(map_name, map_name)
-
-        if end_time:
-            try:
-                if 'T' in end_time:
-                    dt = datetime.fromisoformat(end_time.replace('Z', '+00:00'))
-                    end_time = dt.strftime("%d.%m %H:%M")
-                else:
-                    date_part = end_time[:8]
-                    time_part = end_time[9:15] if len(end_time) > 9 else "??:??"
-                    end_time = f"{date_part[6:8]}.{date_part[4:6]} {time_part[:2]}:{time_part[2:4]}"
-            except:
-                end_time = end_time[:16]
-
-        table.add_row(str(slot), mode_name, map_name_translated, end_time)
-
-    console.print(table)
-    _hr()
-    console.print()
-    await _add_rating_remote("rotation_view")
+        slot  = ev.get("slotId", ev.get("slot", "?"))
+        evinfo= ev.get("event", ev)
+        mode  = evinfo.get("mode", "?")
+        mmap  = evinfo.get("map", "?")
+        end   = ev.get("endTime", "")
+        try:
+            if "T" in end:
+                dt = datetime.fromisoformat(end.replace("Z","+00:00"))
+                end = dt.strftime("%d.%m %H:%M")
+            else:
+                end = end[:16]
+        except Exception:
+            end = end[:16]
+        t.add_row(str(slot), MODE_NAMES.get(mode, mode), MAP_TRANS.get(mmap, mmap), end)
+    console.print(t); _hr(); console.print()
+    await _add_rating("rotation_view")
+    await _press_enter_to_continue()
 
 
-async def show_rankings(region: str = "global", kind: str = "players"):
-    if not HAS_API_KEYS:
-        _err("❌ Нет API ключей. Невозможно получить рейтинги.")
+async def show_global_rankings(kind: str = "players"):
+    if not HAS_BRAWL_KEYS:
+        _err("Нет ключей Brawl Stars API")
+        await _press_enter_to_continue()
         return
+    if not api:
+        _err("API клиент не инициализирован")
+        await _press_enter_to_continue()
+        return
+    region = await _ask("Регион [global]", "global")
     fn = api.get_rankings_players if kind == "players" else api.get_rankings_clubs
-    with console.status(f"[dim]Загрузка топ {kind} ({region})...[/dim]", spinner="dots"):
+    with console.status(f"[dim]Загрузка рейтинга...[/dim]", spinner="dots"):
         data = await fn(region)
     if not data or "items" not in data:
-        _err("❌ Не удалось загрузить рейтинг")
+        _err("Не удалось загрузить рейтинг")
+        await _press_enter_to_continue()
         return
     console.print()
     _hr(f"🏆 Топ {kind} · {region}")
-    table = Table(box=box.MINIMAL, show_header=True,
-                  header_style="dim #9ca3af", padding=(0, 2))
-    table.add_column("#", justify="right", style="dim", min_width=3)
-    table.add_column("Имя", min_width=20)
-    table.add_column("Тег", style="#67e8f9", min_width=12)
-    table.add_column("Трофеи", justify="right", min_width=8)
+    t = Table(box=box.MINIMAL, header_style="dim #9ca3af", padding=(0, 2))
+    t.add_column("#", justify="right", style="dim")
+    t.add_column("Имя")
+    t.add_column("Тег", style="#67e8f9")
+    t.add_column("Трофеи", justify="right")
     if kind == "clubs":
-        table.add_column("Участников", justify="right", min_width=8)
-    for i, item in enumerate(data["items"][:20], 1):
-        row = [
-            str(i), item.get("name", "?"), item.get("tag", "?"),
-            f"[#4ade80]{item.get('trophies', 0)}[/#4ade80]",
-        ]
+        t.add_column("Участников", justify="right")
+    for i, item in enumerate(data["items"][:25], 1):
+        row = [str(i), item.get("name","?"), item.get("tag","?"),
+               f"[#4ade80]{item.get('trophies',0)}[/#4ade80]"]
         if kind == "clubs":
-            row.append(str(item.get("memberCount", 0)))
-        table.add_row(*row)
-    console.print(table)
-    _hr()
-    console.print()
-    await _add_rating_remote(f"{kind}_rankings", region)
+            row.append(str(item.get("memberCount",0)))
+        t.add_row(*row)
+    console.print(t); _hr(); console.print()
+    await _add_rating("rankings_view", region)
+    await _press_enter_to_continue()
 
 
-async def show_powerplay_seasons(region: str = "global"):
-    if not HAS_API_KEYS:
-        _err("❌ Нет API ключей. Невозможно получить сезоны Power Play.")
+async def show_powerplay_seasons():
+    if not HAS_BRAWL_KEYS:
+        _err("Нет ключей Brawl Stars API")
+        await _press_enter_to_continue()
         return
-    with console.status(f"[dim]Загрузка сезонов Power Play ({region})...[/dim]", spinner="dots"):
+    if not api:
+        _err("API клиент не инициализирован")
+        await _press_enter_to_continue()
+        return
+    region = await _ask("Регион [global]", "global")
+    with console.status("[dim]Загрузка сезонов...[/dim]", spinner="dots"):
         data = await api.get_powerplay_seasons(region)
     if not data or "items" not in data:
-        _err("❌ Не удалось загрузить сезоны")
+        _err("Нет данных Power Play")
+        await _press_enter_to_continue()
         return
     console.print()
     _hr(f"⚡ Сезоны Power Play · {region}")
-    table = Table(box=box.MINIMAL, show_header=True,
-                  header_style="dim #9ca3af", padding=(0, 2))
-    table.add_column("ID", style="dim", min_width=10)
-    table.add_column("Название", min_width=20)
-    table.add_column("Начало", style="dim", min_width=12)
-    table.add_column("Конец", style="dim", min_width=12)
+    t = Table(box=box.MINIMAL, header_style="dim #9ca3af", padding=(0, 2))
+    t.add_column("ID", style="dim")
+    t.add_column("Название")
+    t.add_column("Начало", style="dim")
+    t.add_column("Конец", style="dim")
     for s in data["items"]:
-        table.add_row(
-            str(s.get("id", "?")), s.get("name", "?"),
-            (s.get("startTime") or "")[:10],
-            (s.get("endTime") or "")[:10],
-        )
-    console.print(table)
-    _hr()
-    console.print()
-    await _add_rating_remote("powerplay_view", region)
+        t.add_row(str(s.get("id","?")), s.get("name","?"),
+                   str(s.get("startTime",""))[:10], str(s.get("endTime",""))[:10])
+    console.print(t); _hr(); console.print()
+    await _add_rating("powerplay_view", region)
+    await _press_enter_to_continue()
 
 
 async def show_locations():
-    if not HAS_API_KEYS:
-        _err("❌ Нет API ключей. Невозможно получить список стран.")
+    if not HAS_BRAWL_KEYS:
+        _err("Нет ключей Brawl Stars API")
+        await _press_enter_to_continue()
+        return
+    if not api:
+        _err("API клиент не инициализирован")
+        await _press_enter_to_continue()
         return
     with console.status("[dim]Загрузка локаций...[/dim]", spinner="dots"):
         data = await api.get_locations()
     if not data or "items" not in data:
-        _err("❌ Ошибка загрузки локаций")
+        _err("Не удалось загрузить локации")
+        await _press_enter_to_continue()
         return
     console.print()
     _hr("🌍 Список стран")
-    table = Table(box=box.MINIMAL, show_header=True,
-                  header_style="dim #9ca3af", padding=(0, 2))
-    table.add_column("Код", style="#67e8f9", min_width=8)
-    table.add_column("Название", min_width=24)
+    t = Table(box=box.MINIMAL, header_style="dim #9ca3af", padding=(0, 2))
+    t.add_column("Код", style="#67e8f9", min_width=8)
+    t.add_column("Название")
     for loc in data["items"]:
-        table.add_row(loc.get("id", "?"), loc.get("name", "?"))
-    console.print(table)
+        t.add_row(loc.get("id","?"), loc.get("name","?"))
+    console.print(t); _hr(); console.print()
+    await _add_rating("locations_view")
+    await _press_enter_to_continue()
+
+
+# ═══════════════════════════════════════════════════════════════════
+# TEAM CODES
+# ═══════════════════════════════════════════════════════════════════
+
+async def generate_team_code():
+    duration = await _ask_int("Время жизни кода в секундах (10-300)", 120)
+    duration = max(10, min(300, duration))
+    data = await _nest_post("/generate_team_code", {"duration_seconds": duration})
+    if not data or not data.get("code"):
+        _err("Не удалось сгенерировать код (API недоступен)")
+        await _press_enter_to_continue()
+        return
+    console.print()
+    _hr("🔑 Код команды создан")
+    _kv("Код",        f"[bold #facc15]{data['code']}[/bold #facc15]", "dim", "#facc15")
+    _kv("Истекает",   str(data.get("expires_at","?"))[:19])
+    _kv("Длительность", f"{duration} сек")
     _hr()
     console.print()
-    await _add_rating_remote("locations_view")
+    await _add_rating("generate_codes")
+    await _press_enter_to_continue()
 
 
-async def full_club_collect(tag: str):
-    if not HAS_API_KEYS:
-        _err("❌ Нет API ключей. Невозможно собрать данные клуба.")
+async def check_team_code():
+    code = await _ask("Код команды (например XSJ2Z4T)")
+    if not code:
         return
-    with console.status(f"[dim]Загрузка клуба {tag}...[/dim]", spinner="dots"):
-        club_data = await club_col.collect(tag)
-    if not club_data:
-        _err("❌ Клуб не найден")
-        return
-    members = await db.get_club_members(club_data["tag"])
-    if not members:
-        _err("❌ Нет участников для сбора")
-        return
-    _info(f"👥 Участников: {len(members)}")
-    total_battles = 0
-    i = 0
-    try:
-        with Progress(
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-            TimeElapsedColumn(),
-            console=console,
-            transient=True,
-        ) as progress:
-            task = progress.add_task("[cyan]Сбор данных участников...", total=len(members))
-            for i, member in enumerate(members, 1):
-                ptag = member["player_tag"]
-                progress.update(task, advance=1, description=f"[cyan]Сбор данных участников... {i}/{len(members)}")
-                await player_col.collect(ptag)
-                battles = await db.get_battles(ptag, limit=999)
-                total_battles += len(battles)
-    except (KeyboardInterrupt, asyncio.CancelledError):
-        _info("⏸️ Прервано — данные уже в БД")
-    console.print()
-    _ok(f"✅ Готово · участников: {i} · боёв в БД: {total_battles}")
-    console.print()
-    await _add_rating_remote("full_club_collect", tag)
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# Поиск игрока по нику (офлайн/онлайн через GitHub)
-# ═════════════════════════════════════════════════════════════════════════════
-
-async def search_player_by_name():
-    name = await _ask("Введите имя игрока (полностью или часть)")
-    if not name:
-        return
-
-    # Если нет ключей, принудительно используем GitHub
-    actual_mode = search_mode
-    if not HAS_API_KEYS and actual_mode == "offline":
-        actual_mode = "online"
-        _info("API ключи отсутствуют — поиск выполняется в GitHub.")
-
-    if actual_mode == "offline":
-        players = await db.search_players_by_name(name, limit=50)
-        if not players:
-            _err("Ничего не найдено в локальной базе. Попробуйте переключиться в онлайн-режим или заполнить базу.")
-            return
-        console.print()
-        _hr(f"🔍 Результаты поиска по имени: {name} (локальная база)")
-        table = Table(box=box.MINIMAL, show_header=True,
-                      header_style="dim #9ca3af", padding=(0, 2))
-        table.add_column("#", justify="right", style="dim", min_width=3)
-        table.add_column("Тег", style="#67e8f9", min_width=12)
-        table.add_column("Имя", min_width=20)
-        table.add_column("Трофеи", justify="right", min_width=8)
-        table.add_column("Клуб", style="dim", min_width=12)
-        for i, p in enumerate(players, 1):
-            table.add_row(
-                str(i),
-                p.get("tag", "?"),
-                p.get("name", "?"),
-                f"[#4ade80]{p.get('trophies', 0)}[/#4ade80]",
-                p.get("club_tag") or "—"
-            )
-        console.print(table)
-        _hr()
-        console.print()
-        await _add_rating_remote("search_name", name)
-        return
-
-    # Онлайн-поиск через GitHub
-    _info("Поиск по репозиторию GitHub...")
-    players = await search_players_on_github(name)
-    if not players:
-        _err(f"Не найдено игроков с именем, содержащим '{name}', в GitHub репозитории.")
-        return
-
-    console.print()
-    _hr(f"🔍 Результаты поиска по имени: {name} (GitHub база)")
-    table = Table(box=box.MINIMAL, show_header=True,
-                  header_style="dim #9ca3af", padding=(0, 2))
-    table.add_column("#", justify="right", style="dim", min_width=3)
-    table.add_column("Тег", style="#67e8f9", min_width=12)
-    table.add_column("Имя", min_width=20)
-    table.add_column("Трофеи", justify="right", min_width=8)
-    table.add_column("Клуб", style="dim", min_width=12)
-    for i, p in enumerate(players, 1):
-        table.add_row(
-            str(i),
-            p.get("tag", "?"),
-            p.get("name", "?"),
-            f"[#4ade80]{p.get('trophies', 0)}[/#4ade80]",
-            p.get("club_tag") or "—"
-        )
-    console.print(table)
-    _hr()
-    console.print()
-    await _add_rating_remote("search_name", name)
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# Сохранение статистики игрока в PNG
-# ═════════════════════════════════════════════════════════════════════════════
-
-async def save_player_stats_png(tag: str):
-    if not PNG_AVAILABLE:
-        _err("❌ Библиотеки matplotlib или Pillow не установлены. Установите: pip install matplotlib pillow")
-        return
-    if not HAS_API_KEYS:
-        _err("❌ Нет API ключей. Невозможно получить данные игрока.")
-        return
-    from pathlib import Path
-    normalized_tag = api.normalize_tag(tag)
-    with console.status(f"[dim]Загрузка {normalized_tag}...[/dim]", spinner="dots"):
-        data = await player_col.collect(normalized_tag, force_update=False)
+    code = code.upper().strip()
+    data = await _nest_get(f"/team_code/{code}")
     if not data:
-        last_status = api.last_status
-        if last_status == 403:
-            _err("❌ Ошибка 403 — ключ недействителен или истёк")
-        elif last_status == 429:
-            _err("⚠️ Ошибка 429 — превышен лимит запросов, подождите")
-        elif last_status == 404:
-            _err(f"❌ Игрок {normalized_tag} не найден.")
+        _err("Не удалось проверить код")
+        await _press_enter_to_continue()
+        return
+    console.print()
+    _hr(f"🔑 Код {code}")
+    if data.get("active"):
+        _ok(f"Код [bold #facc15]{code}[/bold #facc15] активен")
+        _kv("Истекает", str(data.get("expires_at","?"))[:19])
+        _kv("Создан",   str(data.get("created_at","?"))[:19])
+    else:
+        _err(f"Код {code} неактивен или не существует")
+    _hr()
+    console.print()
+    await _press_enter_to_continue()
+
+
+# ═══════════════════════════════════════════════════════════════════
+# NODES / NETWORK
+# ═══════════════════════════════════════════════════════════════════
+
+async def show_nodes():
+    try:
+        async with aiohttp.ClientSession() as sess:
+            async with sess.get(f"{BASE_URL}/nodes",
+                                timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                else:
+                    data = None
+    except Exception:
+        data = None
+    if not data:
+        _err("Не удалось получить список узлов сети")
+        await _press_enter_to_continue()
+        return
+    console.print()
+    _hr("🌐 Активные узлы сети BrawlNest")
+    _kv("Текущий узел", data.get("current_node","?"))
+    nodes = data.get("nodes", [])
+    if nodes:
+        t = Table(box=box.MINIMAL, header_style="dim #9ca3af", padding=(0, 2))
+        t.add_column("ID", style="dim")
+        t.add_column("Адрес", style="#67e8f9")
+        t.add_column("Пинг мс", justify="right")
+        t.add_column("Последнее обновление", style="dim")
+        for n in nodes:
+            ts = n.get("last_updated", 0)
+            ts_str = datetime.fromtimestamp(ts).strftime("%H:%M:%S") if ts else "?"
+            ping = n.get("ping_ms", 0)
+            ping_s = (f"[#4ade80]{ping}[/#4ade80]" if ping < 50
+                       else f"[#facc15]{ping}[/#facc15]" if ping < 200
+                       else f"[#f87171]{ping}[/#f87171]")
+            t.add_row(n.get("node_id","?"), n.get("address","?"), ping_s, ts_str)
+        console.print(t)
+    else:
+        _info("Других активных узлов нет")
+    _hr()
+    console.print()
+    await _press_enter_to_continue()
+
+
+# ═══════════════════════════════════════════════════════════════════
+# RATING
+# ═══════════════════════════════════════════════════════════════════
+
+async def show_my_rating():
+    rating = await _get_rating()
+    data = await _nest_get("/rating/leaderboard", {"limit": 5})
+    console.print()
+    _hr("⭐ Мой рейтинг")
+    _kv("Очки", f"[bold #facc15]{rating}[/bold #facc15]")
+    _info("Очки начисляются за просмотр игроков, поиск, создание PNG, сбор данных и т.д.")
+    if data and data.get("leaderboard"):
+        console.print()
+        _hr("🏆 Топ-5 рейтинга")
+        t = Table(box=box.MINIMAL, header_style="dim #9ca3af", padding=(0, 2))
+        t.add_column("#", justify="right", style="dim")
+        t.add_column("Ключ (первые 8)", style="dim")
+        t.add_column("Очки", justify="right")
+        for i, entry in enumerate(data["leaderboard"], 1):
+            key_short = (entry.get("api_key","?") or "?")[:8] + "..."
+            t.add_row(str(i), key_short, f"[#facc15]{entry.get('rating',0)}[/#facc15]")
+        console.print(t)
+    _hr()
+    console.print()
+    await _press_enter_to_continue()
+
+
+async def show_rating_leaderboard():
+    limit = await _ask_int("Количество записей", 10)
+    data = await _nest_get("/rating/leaderboard", {"limit": limit})
+    if not data or not data.get("leaderboard"):
+        _err("Таблица рейтинга недоступна")
+        await _press_enter_to_continue()
+        return
+    console.print()
+    _hr("🏆 Таблица лидеров рейтинга")
+    t = Table(box=box.MINIMAL, header_style="dim #9ca3af", padding=(0, 2))
+    t.add_column("#", justify="right", style="dim")
+    t.add_column("Ключ", style="dim")
+    t.add_column("Очки", justify="right")
+    t.add_column("Обновлено", style="dim")
+    for i, entry in enumerate(data["leaderboard"], 1):
+        key_short = (entry.get("api_key","?") or "?")[:12] + "..."
+        t.add_row(str(i), key_short, f"[#facc15]{entry.get('rating',0)}[/#facc15]",
+                   str(entry.get("last_updated","?"))[:19])
+    console.print(t); _hr(); console.print()
+    await _press_enter_to_continue()
+
+
+# ═══════════════════════════════════════════════════════════════════
+# API Key status
+# ═══════════════════════════════════════════════════════════════════
+
+async def show_api_status():
+    console.print()
+    _hr("🔑 Статус API")
+    _kv("BrawlNest сервер", BASE_URL)
+    _kv("BrawlNest API ключ", (API_KEY[:12] + "...") if API_KEY else "[dim]отсутствует[/dim]")
+    _kv("Brawl Stars ключи", str(len(API_KEYS)))
+
+    if API_KEY:
+        data = await _nest_get("/my_status", {"api_key": API_KEY})
+        if data:
+            _kv("Лимит в сутки",  str(data.get("daily_limit", "?")))
+            _kv("Использовано",   str(data.get("used_today", "?")))
+            _kv("Осталось",       f"[#4ade80]{data.get('remaining','?')}[/#4ade80]")
+            _kv("Создан",         str(data.get("created_at","?"))[:19])
+
+    if HAS_BRAWL_KEYS and api:
+        with console.status("[dim]Проверка ключей Brawl Stars...[/dim]", spinner="dots"):
+            d = await api.get_brawlers()
+        if d and "items" in d:
+            _ok(f"Brawl Stars API работает ({len(d['items'])} бравлеров)")
         else:
-            _err("❌ Игрок не найден или ошибка API")
+            _err("Brawl Stars API: ошибка проверки")
+    _hr()
+    console.print()
+    await _press_enter_to_continue()
+
+
+# ═══════════════════════════════════════════════════════════════════
+# PNG export
+# ═══════════════════════════════════════════════════════════════════
+
+async def save_player_png(tag: str):
+    if not PNG_AVAILABLE:
+        _err("Установите: pip install matplotlib pillow numpy")
+        await _press_enter_to_continue()
+        return
+    # Импортируем matplotlib внутри функции, чтобы Pylance не ругался
+    import matplotlib.pyplot as plt
+
+    tag_clean = tag.strip().upper().lstrip("#")
+    data = await _nest_get(f"/player/{tag_clean}")
+    if not data and HAS_BRAWL_KEYS and player_col:
+        data = await player_col.collect(tag_clean, force_update=False)
+    if not data:
+        _err(f"Игрок {tag_clean} не найден")
+        await _press_enter_to_continue()
         return
 
-    name = data['name']
-    player_tag = data['tag']
-    trophies = data['trophies']
-    highest = data.get('highest_trophies', trophies)
-    exp_level = data.get('exp_level', '?')
-    exp_points = data.get('exp_points', 0)
-    wins_3v3 = data.get('wins_3v3', 0)
-    wins_solo = data.get('wins_solo', 0)
-    wins_duo = data.get('wins_duo', 0)
-    club = data.get('club_tag')
-    club_display = club if club else "—"
-    icon_id = data.get('icon_id', 0)
+    name    = data.get("name","?")
+    p_tag   = f"#{data.get('tag','').lstrip('#')}"
+    trophies= data.get("trophies", 0)
+    highest = data.get("highestTrophies") or data.get("highest_trophies", trophies)
+    exp_lvl = data.get("expLevel") or data.get("exp_level", "?")
+    exp_pts = data.get("expPoints") or data.get("exp_points", 0)
+    w3      = data.get("3vs3Victories") or data.get("wins_3v3", 0)
+    wsolo   = data.get("soloVictories") or data.get("wins_solo", 0)
+    wduo    = data.get("duoVictories") or data.get("wins_duo", 0)
+    club    = (data.get("club") or {})
+    club_tag= (club.get("tag","") if isinstance(club,dict) else "") or data.get("club_tag","")
 
-    # ── Загрузка иконки из репозитория ──────────────────────────────────────
-    avatar_img = None
-    cache_dir = Path("icon_cache")
-    cache_dir.mkdir(exist_ok=True)
-    cache_file = cache_dir / f"{icon_id}.png"
+    labels  = ["3x3", "Соло", "Дуо"]
+    sizes   = [w3, wsolo, wduo]
+    colors  = ["#3b82f6", "#ef4444", "#10b981"]
 
-    if cache_file.exists():
-        try:
-            avatar_img = Image.open(cache_file)
-        except:
-            pass
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 9), facecolor="#0f172a")
+    fig.patch.set_facecolor("#0f172a")
+    ax1.set_facecolor("#0f172a"); ax2.set_facecolor("#0f172a")
 
-    if avatar_img is None:
-        # Строим URL на основе ветки icon
-        repo_url = GITHUB_REPO_URL.rstrip(".git")
-        parts = repo_url.split("/")
-        owner = parts[-2]
-        repo = parts[-1]
-        raw_url = f"https://raw.githubusercontent.com/{owner}/{repo}/icon/icon/{icon_id}.png"
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(raw_url) as resp:
-                    if resp.status == 200:
-                        img_data = await resp.read()
-                        with open(cache_file, "wb") as f:
-                            f.write(img_data)
-                        avatar_img = Image.open(io.BytesIO(img_data))
-                    else:
-                        # Иконка не найдена – используем заглушку
-                        unknown_path = Path("unknown_icon.webp")
-                        if unknown_path.exists():
-                            avatar_img = Image.open(unknown_path)
-                        else:
-                            print(f"⚠️ Иконка {icon_id} не найдена, и заглушка отсутствует")
-        except Exception as e:
-            print(f"⚠️ Ошибка загрузки иконки {icon_id}: {e}")
-            unknown_path = Path("unknown_icon.webp")
-            if unknown_path.exists():
-                avatar_img = Image.open(unknown_path)
-
-    # ── Построение графика ───────────────────────────────────────────────────
-    labels = ['3x3', 'Соло', 'Дуо']
-    sizes = [wins_3v3, wins_solo, wins_duo]
-    colors = ['#3b82f6', '#ef4444', '#10b981']
-    explode = (0.05, 0.05, 0.05)
-
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 9), facecolor='#0f172a')
-    fig.patch.set_facecolor('#0f172a')
-    ax1.set_facecolor('#0f172a')
-    ax2.set_facecolor('#0f172a')
-
-    wedges, texts, autotexts = ax1.pie(
-        sizes,
-        labels=labels,
-        autopct=lambda pct: f'{pct:.1f}%' if pct > 0 else '',
-        startangle=90,
-        colors=colors,
-        explode=explode,
-        shadow=True,
-        wedgeprops={'edgecolor': '#ffffff', 'linewidth': 1.5, 'alpha': 0.9},
-        textprops={'color': 'white', 'fontsize': 12, 'weight': 'bold'}
-    )
-    for autotext in autotexts:
-        autotext.set_color('white')
-        autotext.set_fontsize(13)
-        autotext.set_weight('bold')
-    ax1.set_title('Распределение побед', color='#facc15', fontsize=16, pad=20, weight='bold')
+    if sum(sizes) > 0:
+        ax1.pie(sizes, labels=labels, autopct=lambda p: f"{p:.1f}%" if p > 0 else "",
+                colors=colors, startangle=90, explode=(0.05,0.05,0.05),
+                wedgeprops={"edgecolor":"#ffffff","linewidth":1.5},
+                textprops={"color":"white","fontsize":12,"weight":"bold"})
+    ax1.set_title("Распределение побед", color="#facc15", fontsize=16, pad=20, weight="bold")
 
     stats_text = (
-        f"🏆 {name}  {player_tag}\n\n"
+        f"🏆 {name}  {p_tag}\n\n"
         f"Трофеи: {trophies} (макс {highest})\n"
-        f"Уровень: {exp_level} ({exp_points} XP)\n"
-        f"Победы 3x3: {wins_3v3}\n"
-        f"Победы соло: {wins_solo}\n"
-        f"Победы дуо: {wins_duo}\n"
-        f"Клуб: {club_display}\n"
-        f"Обновлено: {datetime.now().strftime('%d.%m.%Y %H:%M')}"
+        f"Уровень: {exp_lvl} ({exp_pts} XP)\n"
+        f"Победы 3x3: {w3}\n"
+        f"Победы соло: {wsolo}\n"
+        f"Победы дуо: {wduo}\n"
+        f"Клуб: {club_tag or '—'}\n"
+        f"Сгенерировано: {datetime.now().strftime('%d.%m.%Y %H:%M')}"
     )
-    ax2.text(0.1, 0.5, stats_text, transform=ax2.transAxes,
-             fontsize=13, verticalalignment='center', linespacing=1.5,
-             bbox=dict(boxstyle='round,pad=0.5', facecolor='#1e293b', edgecolor='#facc15', linewidth=2, alpha=0.9),
-             color='#e2e8f0', weight='normal')
-    ax2.axis('off')
+    ax2.text(0.05, 0.5, stats_text, transform=ax2.transAxes,
+             fontsize=13, verticalalignment="center", linespacing=1.5,
+             bbox=dict(boxstyle="round,pad=0.5", facecolor="#1e293b",
+                        edgecolor="#facc15", linewidth=2, alpha=0.9),
+             color="#e2e8f0")
+    ax2.axis("off")
+    fig.suptitle("BrawlNest Stats", color="#facc15", fontsize=18, weight="bold", y=0.98)
 
-    fig.suptitle('Brawl Stars Stats', color='#facc15', fontsize=18, weight='bold', y=0.98)
-
-    # Вставляем аватарку (если загружена)
-    if avatar_img:
-        # Преобразуем PIL Image в массив numpy для matplotlib
-        import numpy as np
-        avatar_array = np.array(avatar_img.convert('RGB'))
-        fig.figimage(avatar_array, xo=int(fig.bbox.xmax - 90), yo=int(fig.bbox.ymax - 90), alpha=1, zorder=10)
-
-    # Логотип
-    logo_text = "BrawlStatsBot"
-    fig.text(0.95, 0.95, logo_text, transform=fig.transFigure,
-             fontsize=14, weight='bold', color='#facc15', alpha=0.7,
-             ha='right', va='top', fontfamily='sans-serif',
-             bbox=dict(boxstyle='round,pad=0.2', facecolor='#1e293b', edgecolor='#facc15', alpha=0.5))
-
+    filename = f"player_{tag_clean}.png"
     plt.tight_layout(pad=2.0)
-    filename = f"player_{normalized_tag}.png"
-    plt.savefig(filename, dpi=200, bbox_inches='tight', facecolor=fig.get_facecolor(), edgecolor='none')
+    plt.savefig(filename, dpi=200, bbox_inches="tight", facecolor=fig.get_facecolor())
     plt.close(fig)
-
-    _ok(f"✅ Изображение сохранено: {filename}")
+    _ok(f"Сохранено: {filename}")
     console.print()
-    await _add_rating_remote("save_png", tag)
+    await _add_rating("save_png", tag_clean)
+    await _press_enter_to_continue()
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# Поиск клуба по названию (офлайн/онлайн через GitHub)
-# ═════════════════════════════════════════════════════════════════════════════
-
-async def search_club_by_name():
-    name = await _ask("Введите название клуба (полностью или часть)")
-    if not name:
-        return
-
-    # Если нет ключей, принудительно используем GitHub
-    actual_mode = search_mode
-    if not HAS_API_KEYS and actual_mode == "offline":
-        actual_mode = "online"
-        _info("API ключи отсутствуют — поиск выполняется в GitHub.")
-
-    if actual_mode == "offline":
-        clubs = await db.search_clubs_by_name(name, limit=50)
-        if not clubs:
-            _err("Ничего не найдено в локальной базе. Попробуйте переключиться в онлайн-режим.")
-            return
-        console.print()
-        _hr(f"🔍 Результаты поиска по названию: {name} (локальная база)")
-        table = Table(box=box.MINIMAL, show_header=True,
-                      header_style="dim #9ca3af", padding=(0, 2))
-        table.add_column("#", justify="right", style="dim", min_width=3)
-        table.add_column("Тег", style="#67e8f9", min_width=12)
-        table.add_column("Название", min_width=20)
-        table.add_column("Трофеи", justify="right", min_width=8)
-        table.add_column("Участников", justify="right", min_width=8)
-        for i, c in enumerate(clubs, 1):
-            table.add_row(
-                str(i),
-                c.get("tag", "?"),
-                c.get("name", "?"),
-                f"[#4ade80]{c.get('trophies', 0)}[/#4ade80]",
-                str(c.get("members_count", 0))
-            )
-        console.print(table)
-        _hr()
-        console.print()
-        await _add_rating_remote("search_club_name", name)
-        return
-
-    # Онлайн-поиск через GitHub
-    _info("Поиск по репозиторию GitHub...")
-    clubs = await search_clubs_on_github(name)
-    if not clubs:
-        _err(f"Не найдено клубов с названием, содержащим '{name}', в GitHub репозитории.")
-        return
-
-    console.print()
-    _hr(f"🔍 Результаты поиска по названию: {name} (GitHub база)")
-    table = Table(box=box.MINIMAL, show_header=True,
-                  header_style="dim #9ca3af", padding=(0, 2))
-    table.add_column("#", justify="right", style="dim", min_width=3)
-    table.add_column("Тег", style="#67e8f9", min_width=12)
-    table.add_column("Название", min_width=20)
-    table.add_column("Трофеи", justify="right", min_width=8)
-    table.add_column("Участников", justify="right", min_width=8)
-    for i, c in enumerate(clubs, 1):
-        table.add_row(
-            str(i),
-            c.get("tag", "?"),
-            c.get("name", "?"),
-            f"[#4ade80]{c.get('trophies', 0)}[/#4ade80]",
-            str(c.get("members_count", 0))
-        )
-    console.print(table)
-    _hr()
-    console.print()
-    await _add_rating_remote("search_club_name", name)
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# Функции поиска существующих игроков/клубов (требуют API)
-# ═════════════════════════════════════════════════════════════════════════════
-
-async def check_active_players_from_file(file_path: str, days_threshold: int = 90):
-    if not HAS_API_KEYS:
-        _err("❌ Нет API ключей. Невозможно проверить активность.")
-        return
-    if not os.path.exists(file_path):
-        _err(f"Файл {file_path} не найден")
-        return
-    with open(file_path) as f:
-        tags = [ln.strip() for ln in f if ln.strip()]
-    if not tags:
-        _err("Файл пуст")
-        return
-
-    base, ext = os.path.splitext(file_path)
-    out_file = f"{base}_active{ext}"
-    existing = set()
-    if os.path.exists(out_file):
-        with open(out_file) as f:
-            existing = {line.strip().split(',')[0] for line in f if line.strip()}
-
-    console.print(f"\n  [dim]Проверка {len(tags)} тегов на активность (последние {days_threshold} дней)...[/dim]")
-
-    active_found = []
-    total = len(tags)
-    done = 0
-
-    with Progress(
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-        TimeElapsedColumn(),
-        console=console,
-        transient=True,
-    ) as progress:
-        task = progress.add_task("[cyan]Проверка тегов...", total=total)
-        for tag in tags:
-            normalized = api.normalize_tag(tag)
-            player_data = await api.get_player(normalized, force=True)
-            if not player_data:
-                done += 1
-                progress.update(task, advance=1)
-                continue
-
-            battlelog = await api.get_battlelog(normalized, force=True)
-            last_battle_date = None
-            if battlelog and battlelog.get("items"):
-                last_battle = battlelog["items"][0]
-                battle_time = last_battle.get("battleTime")
-                if battle_time:
-                    last_battle_date = battle_time[:8]
-
-            is_active = False
-            if last_battle_date:
-                try:
-                    last_date = datetime.strptime(last_battle_date, "%Y%m%d")
-                    if (datetime.now() - last_date).days <= days_threshold:
-                        is_active = True
-                except:
-                    pass
-
-            if is_active:
-                active_found.append((tag, last_battle_date))
-            done += 1
-            progress.update(task, advance=1)
-
-    console.print()
-    with open(out_file, "w") as f:
-        for tag, last_date in active_found:
-            f.write(f"{tag},{last_date}\n")
-    _ok(f"Готово. Активных: {len(active_found)} из {total} → {out_file}")
-    console.print()
-    await _add_rating_remote("check_active_players", file_path)
-
-
-async def generate_command_codes():
-    count = await _ask_int("Количество кодов", 100)
-    length = await _ask_int("Длина кода (обычно 7-8 символов)", 8)
-    output_file = await _ask("Имя выходного файла", "game_codes.txt")
-    if not output_file:
-        output_file = "game_codes.txt"
-
-    valid_chars = "0123456789ABCDEFGHJKLMNPQRSTUVWXYZ"
-    codes = []
-    for _ in range(count):
-        code = ''.join(random.choices(valid_chars, k=length))
-        codes.append(code)
-
-    with open(output_file, "w") as f:
-        for code in codes:
-            f.write(f"{code}\n")
-
-    _ok(f"Сгенерировано {count} кодов длиной {length} → {output_file}")
-    console.print()
-    await _add_rating_remote("generate_codes")
-
-
-async def check_club_by_tag(tag: str):
-    if not HAS_API_KEYS:
-        _err("❌ Нет API ключей. Невозможно проверить клуб.")
-        return
-    normalized = api.normalize_tag(tag)
-    with console.status(f"[dim]Проверка клуба {normalized}...[/dim]", spinner="dots"):
-        data = await api.get_club(normalized, force=True)
-    if data:
-        _ok(f"✅ Клуб существует: {data['name']} (участников: {data.get('membersCount', 0)})")
-        console.print()
-        _kv("Название", data.get("name", "?"), "dim", "white")
-        _kv("Тег", f"#{data.get('tag', '?').lstrip('#')}", "dim", "#67e8f9")
-        _kv("Трофеи", str(data.get("trophies", 0)), "dim", "#4ade80")
-        _kv("Участников", str(data.get("membersCount", 0)), "dim", "white")
-        _kv("Требуется", str(data.get("requiredTrophies", "?")), "dim", "white")
-        await _add_rating_remote("check_club", tag)
-    else:
-        _err(f"❌ Клуб {normalized} не найден")
-    console.print()
-
-
-async def search_existing_clubs(total_requests: int = 1000, output_file: Optional[str] = None):
-    if not HAS_API_KEYS:
-        _err("❌ Нет API ключей. Невозможно выполнить поиск.")
-        return
-    if output_file is None:
-        output_file = SEARCH_CFG.get("clubs_output_file", "existing_clubs.txt")
-    existing: set[str] = set()
-    if os.path.exists(output_file):
-        with open(output_file) as f:
-            existing = {line.strip() for line in f if line.strip()}
-        _info(f"Загружено {len(existing)} существующих тегов клубов")
-
-    tags = generate_tags(
-        total_requests,
-        SEARCH_CFG.get("tag_min_length", 7),
-        SEARCH_CFG.get("tag_max_length", 9),
-    )
-    found, interrupted = await _run_search_engine("clubs", tags, existing, output_file, "Поиск клубов")
-    all_tags = existing | set(found)
-    status = "остановлен" if interrupted else "завершён"
-    _ok(f"{status}  ·  новых: {len(found)}  всего: {len(all_tags)}  →  {output_file}")
-    console.print()
-    await _add_rating_remote("search_existing_clubs", output_file)
-
+# ═══════════════════════════════════════════════════════════════════
+# SEARCH / FILL (direct Brawl API)
+# ═══════════════════════════════════════════════════════════════════
 
 def _listen_for_stop(stop_event: threading.Event):
     try:
@@ -2364,7 +1401,7 @@ def _listen_for_stop(stop_event: threading.Event):
         try:
             while not stop_event.is_set():
                 ch = sys.stdin.read(1)
-                if ch in ("q", "Q", "\x03", "\x04"):
+                if ch in ("q","Q","\x03","\x04"):
                     stop_event.set()
                     break
         finally:
@@ -2373,733 +1410,822 @@ def _listen_for_stop(stop_event: threading.Event):
         pass
 
 
-def _save_tags(found: list[str], existing: set[str], output_file: str) -> set[str]:
-    all_tags = existing | set(found)
-    with open(output_file, "w") as f:
-        for t in sorted(all_tags):
-            f.write(f"{t}\n")
-    return all_tags
-
-
-async def _run_search_engine(
-    endpoint: str,  # "players" или "clubs"
-    tags: list[str],
-    existing: set[str],
-    output_file: str,
-    label: str,
-) -> tuple[list[str], bool]:
-    if not HAS_API_KEYS:
-        _err("❌ Нет API ключей. Невозможно выполнить поиск.")
+async def _run_search(endpoint: str, tags: List[str], existing: set,
+                       output_file: str, label: str):
+    if not HAS_BRAWL_KEYS:
+        _err("Нет ключей Brawl Stars API. Добавьте API_KEYS в .env")
         return [], True
-    found: list[str] = []
+    found = []
     stop_event = threading.Event()
-    found_lock = asyncio.Lock()
-    rate_lock = asyncio.Lock()
-    key_counts: dict[str, list] = {k: [] for k in API_KEYS}
-    workers_per = SEARCH_CFG.get("workers_per_key", 10)
-    interrupted = False
-    done = 0
-    total = len(tags)
-
-    t_listener = threading.Thread(target=_listen_for_stop, args=(stop_event,), daemon=True)
-    t_listener.start()
-
+    threading.Thread(target=_listen_for_stop, args=(stop_event,), daemon=True).start()
     queue: asyncio.Queue[str] = asyncio.Queue()
     for t in tags:
         await queue.put(t)
 
-    with Progress(
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-        TimeElapsedColumn(),
-        console=console,
-        transient=True,
-    ) as progress:
-        task = progress.add_task(f"[cyan]{label}...", total=total)
+    with Progress(TextColumn("[progress.description]{task.description}"), BarColumn(),
+                   TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                   TimeElapsedColumn(), console=console, transient=True) as progress:
+        task = progress.add_task(f"[cyan]{label}...", total=len(tags))
 
-        async def worker(session: aiohttp.ClientSession, key: str):
-            nonlocal done
-            warned_403 = False
-            warned_429 = False
-            warned_other = False
+        async def worker(key: str):
             while not stop_event.is_set():
                 try:
                     tag = await asyncio.wait_for(queue.get(), timeout=1.0)
-                except asyncio.TimeoutError:
-                    if queue.empty():
-                        break
-                    continue
-                except asyncio.CancelledError:
-                    try:
-                        queue.task_done()
-                    except Exception:
-                        pass
+                except (asyncio.TimeoutError, asyncio.CancelledError):
                     break
-
-                async with rate_lock:
-                    now = time.time()
-                    key_counts[key] = [x for x in key_counts[key] if now - x < 60]
-                    if len(key_counts[key]) >= 30:
-                        await asyncio.sleep(60 - (now - key_counts[key][0]) + 0.1)
-                        now = time.time()
-                        key_counts[key] = [x for x in key_counts[key] if now - x < 60]
-                    key_counts[key].append(now)
-
+                url = f"https://api.brawlstars.com/v1/{endpoint}/%23{tag}"
                 try:
-                    url = f"https://api.brawlstars.com/v1/{endpoint}/%23{tag}"
-                    async with session.get(url, headers={"Authorization": f"Bearer {key}"}, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                        if resp.status == 200:
-                            async with found_lock:
+                    async with aiohttp.ClientSession() as sess:
+                        async with sess.get(url, headers={"Authorization": f"Bearer {key}"},
+                                             timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                            if resp.status == 200:
                                 found.append(tag)
-                        elif resp.status == 403:
-                            if not warned_403:
-                                warned_403 = True
-                                print(f"\033[91m[ОШИБКА] 403 Forbidden\033[0m — ключ {key[:10]}… недействителен", file=sys.stderr)
-                        elif resp.status == 429:
-                            if not warned_429:
-                                warned_429 = True
-                                print(f"\033[93m[ПРЕДУПРЕЖДЕНИЕ] 429 Too Many Requests\033[0m", file=sys.stderr)
-                            ra = int(resp.headers.get("Retry-After", 60))
-                            await asyncio.sleep(ra)
-                            await queue.put(tag)
-                            queue.task_done()
-                            continue
-                except Exception as e:
-                    if not warned_other:
-                        warned_other = True
-                        print(f"\033[91m[ОШИБКА] {e}\033[0m", file=sys.stderr)
-
-                done += 1
+                            elif resp.status == 429:
+                                ra = int(resp.headers.get("Retry-After", 60))
+                                await asyncio.sleep(ra)
+                                await queue.put(tag)
+                                queue.task_done()
+                                continue
+                except Exception:
+                    pass
                 progress.update(task, advance=1)
                 queue.task_done()
 
-        connector = aiohttp.TCPConnector(limit=len(API_KEYS) * workers_per + 10)
+        workers = [asyncio.create_task(worker(k)) for k in API_KEYS for _ in range(5)]
         try:
-            async with aiohttp.ClientSession(connector=connector) as session:
-                tasks = [
-                    asyncio.create_task(worker(session, key))
-                    for key in API_KEYS
-                    for _ in range(workers_per)
-                ]
-                try:
-                    while not stop_event.is_set():
-                        if all(t.done() for t in tasks) and queue.empty():
-                            break
-                        await asyncio.sleep(0.2)
-                    if not stop_event.is_set():
-                        await asyncio.wait_for(queue.join(), timeout=30)
-                    else:
-                        interrupted = True
-                except (KeyboardInterrupt, asyncio.CancelledError):
-                    interrupted = True
-                    stop_event.set()
-                except asyncio.TimeoutError:
-                    pass
-                finally:
-                    for t in tasks:
-                        t.cancel()
-                    await asyncio.gather(*tasks, return_exceptions=True)
-        except (KeyboardInterrupt, asyncio.CancelledError):
-            interrupted = True
+            await asyncio.wait_for(queue.join(), timeout=3600)
+        except (asyncio.TimeoutError, asyncio.CancelledError, KeyboardInterrupt):
+            stop_event.set()
+        for w in workers:
+            w.cancel()
+        await asyncio.gather(*workers, return_exceptions=True)
 
-    _save_tags(found, existing, output_file)
-    return found, interrupted
-
-
-async def search_players(total_requests: int = 1000, output_file: Optional[str] = None):
-    if not HAS_API_KEYS:
-        _err("❌ Нет API ключей. Невозможно выполнить поиск.")
-        return
-    if output_file is None:
-        output_file = SEARCH_CFG.get("output_file", "The_players.txt")
-    existing: set[str] = set()
-    if os.path.exists(output_file):
-        with open(output_file) as f:
-            existing = {line.strip() for line in f if line.strip()}
-        _info(f"Загружено {len(existing)} существующих тегов")
-    tags = generate_tags(
-        total_requests,
-        SEARCH_CFG.get("tag_min_length", 7),
-        SEARCH_CFG.get("tag_max_length", 9),
-    )
-    found, interrupted = await _run_search_engine(
-        "players", tags, existing, output_file, "Поиск"
-    )
     all_tags = existing | set(found)
+    with open(output_file, "w") as f:
+        f.write("\n".join(sorted(all_tags)) + "\n")
+    return found, stop_event.is_set()
+
+
+async def search_existing_players():
+    if not HAS_BRAWL_KEYS:
+        _err("Нет ключей Brawl Stars API")
+        await _press_enter_to_continue()
+        return
+    n   = await _ask_int("Количество запросов", 1000)
+    out = await _ask("Файл для сохранения", "The_players.txt")
+    out = out or "The_players.txt"
+    existing = set()
+    if os.path.exists(out):
+        with open(out) as f:
+            existing = {l.strip() for l in f if l.strip()}
+        _info(f"Загружено {len(existing)} существующих тегов")
+    tags   = generate_tags(n, SEARCH_CFG.get("tag_min_length",7), SEARCH_CFG.get("tag_max_length",9))
+    found, interrupted = await _run_search("players", tags, existing, out, "Поиск игроков")
     status = "остановлен" if interrupted else "завершён"
-    _ok(f"{status}  ·  новых: {len(found)}  всего: {len(all_tags)}  →  {output_file}")
+    _ok(f"{status} · новых: {len(found)} · всего: {len(existing|set(found))} → {out}")
     console.print()
-    await _add_rating_remote("search_players", output_file)
+    await _add_rating("search_players", out)
+    await _press_enter_to_continue()
 
 
-async def check_players_from_file(file_path: str):
-    if not HAS_API_KEYS:
-        _err("❌ Нет API ключей. Невозможно проверить файл.")
+async def search_existing_clubs():
+    if not HAS_BRAWL_KEYS:
+        _err("Нет ключей Brawl Stars API")
+        await _press_enter_to_continue()
         return
-    if not os.path.exists(file_path):
-        _err(f"Файл {file_path} не найден")
+    n   = await _ask_int("Количество запросов", 1000)
+    out = await _ask("Файл для сохранения", "existing_clubs.txt")
+    out = out or "existing_clubs.txt"
+    existing = set()
+    if os.path.exists(out):
+        with open(out) as f:
+            existing = {l.strip() for l in f if l.strip()}
+    tags   = generate_tags(n, 7, 9)
+    found, interrupted = await _run_search("clubs", tags, existing, out, "Поиск клубов")
+    status = "остановлен" if interrupted else "завершён"
+    _ok(f"{status} · новых: {len(found)} · всего: {len(existing|set(found))} → {out}")
+    console.print()
+    await _add_rating("search_existing_clubs", out)
+    await _press_enter_to_continue()
+
+
+async def check_players_from_file():
+    path = await _ask("Путь к файлу с тегами")
+    if not path or not os.path.exists(path):
+        _err("Файл не найден")
+        await _press_enter_to_continue()
         return
-    with open(file_path) as f:
-        tags = [ln.strip() for ln in f if ln.strip()]
+    with open(path) as f:
+        tags = [l.strip() for l in f if l.strip()]
+    base, ext = os.path.splitext(path)
+    out = f"{base}_existing{ext}"
+    existing = set()
+    if os.path.exists(out):
+        with open(out) as f:
+            existing = {l.strip() for l in f if l.strip()}
+    found, interrupted = await _run_search("players", tags, existing, out, "Проверка")
+    _ok(f"Найдено {len(existing|set(found))} существующих → {out}")
+    console.print()
+    await _add_rating("check_players_file", path)
+    await _press_enter_to_continue()
+
+
+async def show_random_player():
+    fname = SEARCH_CFG.get("output_file", "The_players.txt")
+    if not os.path.exists(fname):
+        _err(f"Файл {fname} не найден. Сначала выполните поиск игроков.")
+        await _press_enter_to_continue()
+        return
+    with open(fname) as f:
+        tags = [l.strip() for l in f if l.strip()]
     if not tags:
         _err("Файл пуст")
-        return
-    base, ext = os.path.splitext(file_path)
-    out_file = f"{base}_existing{ext}"
-    existing: set[str] = set()
-    if os.path.exists(out_file):
-        with open(out_file) as f:
-            existing = {line.strip() for line in f if line.strip()}
-    _info(f"Загружено {len(tags)} тегов из {file_path}")
-    found, interrupted = await _run_search_engine(
-        "players", tags, existing, out_file, "Проверка"
-    )
-    all_tags = existing | set(found)
-    status = "остановлен" if interrupted else "завершён"
-    _ok(f"{status}  ·  найдено: {len(all_tags)} существующих  →  {out_file}")
-    console.print()
-    await _add_rating_remote("check_players_file", file_path)
-
-
-async def show_random_existing_player():
-    output_file = SEARCH_CFG.get("output_file", "The_players.txt")
-    if not os.path.exists(output_file):
-        _err(f"Файл {output_file} не найден. Сначала выполните поиск существующих игроков.")
-        return
-    with open(output_file) as f:
-        tags = [line.strip() for line in f if line.strip()]
-    if not tags:
-        _err("Файл пуст. Сначала выполните поиск существующих игроков.")
+        await _press_enter_to_continue()
         return
     tag = random.choice(tags)
-    _info(f"Выбран случайный тег: {tag}")
-    await show_player(tag)
+    _info(f"Случайный тег: #{tag}")
+    await show_player(tag)  # show_player уже содержит _press_enter_to_continue
 
 
-async def check_team_game():
-    if not HAS_API_KEYS:
-        _err("❌ Нет API ключей. Невозможно проверить командную игру.")
+async def fill_database():
+    if not HAS_BRAWL_KEYS:
+        _err("Нет ключей Brawl Stars API")
+        await _press_enter_to_continue()
         return
-    tags_input = await _ask("Введите теги игроков через запятую (без #)", "")
-    if not tags_input:
-        return
-
-    raw_tags = [t.strip().upper().replace("#", "") for t in tags_input.split(",") if t.strip()]
-    if len(raw_tags) < 2:
-        _err("Нужно хотя бы два игрока для проверки командной игры.")
-        return
-
-    battlelogs = {}
-    for tag in raw_tags:
-        with console.status(f"[dim]Загрузка battlelog для {tag}...[/dim]", spinner="dots"):
-            data = await api.get_battlelog(tag, force=True)
-            if data and "items" in data:
-                battlelogs[tag] = data["items"]
-            else:
-                battlelogs[tag] = []
-
-    matches = []
-    for i, (tag1, battles1) in enumerate(battlelogs.items()):
-        for j, (tag2, battles2) in enumerate(battlelogs.items()):
-            if i >= j:
-                continue
-            for b1 in battles1:
-                b1_time = b1.get("battleTime", "")[:16]
-                b1_mode = b1.get("event", {}).get("mode")
-                b1_result = b1.get("battle", {}).get("result")
-                for b2 in battles2:
-                    b2_time = b2.get("battleTime", "")[:16]
-                    if b1_time == b2_time:
-                        teams1 = b1.get("battle", {}).get("teams", [])
-                        teams2 = b2.get("battle", {}).get("teams", [])
-                        players1 = set()
-                        for team in teams1:
-                            for player in team:
-                                players1.add(player.get("tag", ""))
-                        players2 = set()
-                        for team in teams2:
-                            for player in team:
-                                players2.add(player.get("tag", ""))
-                        if f"#{tag1}" in players1 and f"#{tag2}" in players2:
-                            matches.append({
-                                "time": b1_time,
-                                "mode": b1_mode,
-                                "result": b1_result,
-                                "players": players1
-                            })
-                            break
-
-    if not matches:
-        _err("Не найдено общих боёв среди указанных игроков за последнее время.")
-        return
-
-    console.print()
-    _hr("🎮 Обнаруженные командные игры")
-    table = Table(box=box.MINIMAL, show_header=True,
-                  header_style="dim #9ca3af", padding=(0, 2))
-    table.add_column("Время", style="dim", min_width=16)
-    table.add_column("Режим", min_width=24)
-    table.add_column("Результат", min_width=12)
-    table.add_column("Участники", style="dim", min_width=30)
-
-    for match in matches:
-        players_list = ", ".join(sorted(match["players"]))
-        table.add_row(
-            match["time"],
-            MODE_NAMES.get(match["mode"], match["mode"]),
-            "🏆 Победа" if match["result"] == "victory" else "💔 Поражение" if match["result"] else "—",
-            players_list
-        )
-    console.print(table)
-    _hr()
-    console.print()
-    await _add_rating_remote("check_team_game")
-
-
-async def fill_database(total_requests: int = 1000):
-    if not HAS_API_KEYS:
-        _err("❌ Нет API ключей. Невозможно заполнить базу.")
-        return
-    _info("Этап 1: поиск существующих игроков...")
-    temp_file = "temp_found_players.txt"
-    tags = generate_tags(
-        total_requests,
-        SEARCH_CFG.get("tag_min_length", 7),
-        SEARCH_CFG.get("tag_max_length", 9),
-    )
-    found, interrupted = await _run_search_engine(
-        "players", tags, set(), temp_file, "Поиск игроков"
-    )
+    n = await _ask_int("Количество запросов для поиска игроков", 1000)
+    temp = "temp_fill_players.txt"
+    tags = generate_tags(n, SEARCH_CFG.get("tag_min_length",7), SEARCH_CFG.get("tag_max_length",9))
+    found, _ = await _run_search("players", tags, set(), temp, "Поиск игроков для заполнения")
     if not found:
-        _err("Не найдено ни одного игрока. Попробуйте увеличить количество запросов.")
-        if os.path.exists(temp_file):
-            os.remove(temp_file)
+        _err("Не найдено игроков")
+        await _press_enter_to_continue()
         return
-
-    _info(f"Найдено {len(found)} игроков. Этап 2: загрузка данных...")
-
+    _info(f"Найдено {len(found)} игроков. Загрузка данных...")
     loaded = 0
-    with Progress(
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-        TimeElapsedColumn(),
-        console=console,
-        transient=True,
-    ) as progress:
-        task = progress.add_task("[cyan]Загрузка профилей и боёв...", total=len(found))
+    with Progress(TextColumn("[progress.description]{task.description}"), BarColumn(),
+                   TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                   TimeElapsedColumn(), console=console, transient=True) as prog:
+        task = prog.add_task("[cyan]Загрузка...", total=len(found))
         for tag in found:
-            try:
-                data = await player_col.collect(tag, force_update=True)
-                if data and data.get("club_tag"):
-                    club_tag_raw = data["club_tag"]
-                    if isinstance(club_tag_raw, dict):
-                        club_tag = club_tag_raw.get("tag", "").lstrip('#')
-                    else:
-                        club_tag = club_tag_raw.lstrip('#')
-                    existing_club = await db.get_club(club_tag)
-                    if not existing_club:
-                        club_data = await api.get_club(club_tag, force=True)
-                        if club_data:
-                            await db.upsert_club(club_data)
-                            members_data = await api.get_club_members(club_tag)
-                            if members_data and "items" in members_data:
-                                await db.upsert_club_members(club_tag, members_data["items"])
-                loaded += 1
-            except Exception as e:
-                logger.error(f"Ошибка при загрузке игрока {tag}: {e}")
-            progress.update(task, advance=1)
-
-    _ok(f"Готово. Загружено {loaded} игроков из {len(found)} найденных.")
-    if os.path.exists(temp_file):
-        os.remove(temp_file)
-
-    if SYNC_CFG.get("push_after_fill", False):
-        await sync_push_to_github()
+            if player_col:
+                await player_col.collect(tag, force_update=True)
+            loaded += 1
+            prog.update(task, advance=1)
+    _ok(f"Загружено {loaded} игроков")
+    if os.path.exists(temp):
+        os.remove(temp)
     console.print()
-    await _add_rating_remote("fill_db")
+    await _add_rating("fill_db")
+    await _press_enter_to_continue()
 
-
-# ═════════════════════════════════════════════════════════════════════════════
-# Непрерывное заполнение базы данных
-# ═════════════════════════════════════════════════════════════════════════════
 
 async def continuous_fill():
-    """Бесконечный цикл генерации тегов, проверки существования и сбора данных."""
-    if not HAS_API_KEYS:
-        _err("❌ Нет API ключей. Невозможно выполнить непрерывное заполнение.")
+    if not HAS_BRAWL_KEYS:
+        _err("Нет ключей Brawl Stars API")
+        await _press_enter_to_continue()
         return
-
     console.print()
-    console.print("[bold]Непрерывное заполнение базы данных[/bold]")
-    hours = await _ask("Время работы в часах (0 — бесконечно, пока не нажмёте q)", "0")
-    try:
-        run_hours = float(hours)
-    except:
-        run_hours = 0
-    interval_min = await _ask_int("Интервал сохранения в GitHub (минуты)", 30)
-    if interval_min <= 0:
-        interval_min = 30
-
-    start_time = time.time()
+    console.print("[bold]Непрерывное заполнение базы[/bold]")
+    _info("Нажмите q для остановки")
     stop_event = threading.Event()
-    t_listener = threading.Thread(target=_listen_for_stop, args=(stop_event,), daemon=True)
-    t_listener.start()
-
-    # Задача периодической синхронизации с GitHub
-    async def periodic_github_sync():
-        while not stop_event.is_set():
-            await asyncio.sleep(interval_min * 60)
-            if not stop_event.is_set():
-                _info("Периодическая синхронизация с GitHub...")
-                try:
-                    ghs = GitHubSync()
-                    await ghs.export_and_push()
-                    _ok("Синхронизация выполнена.")
-                except Exception as e:
-                    _err(f"Ошибка синхронизации: {e}")
-
-    sync_task = asyncio.create_task(periodic_github_sync())
-
-    # Основной цикл сбора
-    processed_total = 0
-    saved_players = 0
-    saved_clubs = 0
+    threading.Thread(target=_listen_for_stop, args=(stop_event,), daemon=True).start()
+    saved = 0
     try:
         while not stop_event.is_set():
-            # Генерируем пачку тегов (например, 100)
-            tags = generate_tags(100, SEARCH_CFG.get("tag_min_length", 7), SEARCH_CFG.get("tag_max_length", 9))
+            tags = generate_tags(50, 7, 9)
             for tag in tags:
                 if stop_event.is_set():
                     break
-                # Проверяем существование игрока
-                player_data = await api.get_player(tag, force=True)
-                if player_data:
-                    # Сохраняем игрока
-                    await player_col.collect(tag, force_update=True)
-                    saved_players += 1
-                    await _add_rating_remote("continuous_fill", tag)
-                    # Если у игрока есть клуб, сохраняем клуб
-                    club = player_data.get("club")
-                    if club:
-                        # club может быть строкой или словарём
-                        if isinstance(club, dict):
-                            club_tag_clean = club.get("tag", "").lstrip('#')
-                        elif isinstance(club, str):
-                            club_tag_clean = club.lstrip('#')
-                        else:
-                            club_tag_clean = None
-                        if club_tag_clean:
-                            existing_club = await db.get_club(club_tag_clean)
-                            if not existing_club:
-                                club_data = await api.get_club(club_tag_clean, force=True)
-                                if club_data:
-                                    await db.upsert_club(club_data)
-                                    saved_clubs += 1
-                                    members_data = await api.get_club_members(club_tag_clean)
-                                    if members_data and "items" in members_data:
-                                        await db.upsert_club_members(club_tag_clean, members_data["items"])
-                processed_total += 1
-                # Небольшая задержка между запросами, чтобы не превысить лимиты
-                await asyncio.sleep(0.2)
-
-            # После каждой пачки проверяем время работы
-            if run_hours > 0 and (time.time() - start_time) > run_hours * 3600:
-                _info(f"Время работы истекло ({run_hours} ч). Останавливаемся.")
-                break
-
-    except asyncio.CancelledError:
+                if api:
+                    p = await api.get_player(tag, force=True)
+                    if p and player_col and db:
+                        await player_col.collect(tag, force_update=True)
+                        saved += 1
+                        await _add_rating("continuous_fill", tag)
+                await asyncio.sleep(0.15)
+    except (asyncio.CancelledError, KeyboardInterrupt):
         pass
-    finally:
-        stop_event.set()
-        sync_task.cancel()
-        try:
-            await sync_task
-        except asyncio.CancelledError:
-            pass
-
-    _ok(f"Остановлено. Всего обработано тегов: {processed_total}, сохранено игроков: {saved_players}, клубов: {saved_clubs}")
-    # Финальная синхронизация
-    if saved_players > 0 or saved_clubs > 0:
-        _info("Финальная синхронизация с GitHub...")
-        await sync_push_to_github()
+    _ok(f"Остановлено. Сохранено: {saved} игроков")
+    if saved > 0 and SYNC_CFG.get("push_after_fill", False):
+        await sync_push()
+    console.print()
+    await _press_enter_to_continue()
 
 
-async def sync_push_to_github():
-    _info("Экспорт данных и отправка в GitHub...")
+async def generate_random_codes():
+    count  = await _ask_int("Количество кодов", 100)
+    length = await _ask_int("Длина кода", 8)
+    fname  = await _ask("Имя файла", "game_codes.txt")
+    fname  = fname or "game_codes.txt"
+    chars  = "0123456789ABCDEFGHJKLMNPQRSTUVWXYZ"
+    codes  = ["".join(random.choices(chars, k=length)) for _ in range(count)]
+    with open(fname, "w") as f:
+        f.write("\n".join(codes) + "\n")
+    _ok(f"Сгенерировано {count} кодов → {fname}")
+    console.print()
+    await _add_rating("generate_codes")
+    await _press_enter_to_continue()
+
+
+# ═══════════════════════════════════════════════════════════════════
+# SYNC
+# ═══════════════════════════════════════════════════════════════════
+
+async def sync_push():
+    _info("Экспорт данных в GitHub...")
     try:
         ghs = GitHubSync()
         await ghs.export_and_push()
-        _ok("✅ Данные успешно выгружены в GitHub")
-        await _add_rating_remote("sync_push")
+        _ok("Данные выгружены в GitHub")
+        await _add_rating("sync_push")
     except Exception as e:
         _err(f"Ошибка синхронизации: {e}")
-        logger.exception("GitHub push failed")
+    # Убираем вызов _press_enter_to_continue() — чтобы меню показывалось сразу
 
 
-async def sync_pull_from_github():
+async def sync_pull():
     _info("Загрузка данных из GitHub...")
     try:
         ghs = GitHubSync()
         await ghs.pull_and_import()
-        _ok("✅ Данные успешно загружены из GitHub")
-        await _add_rating_remote("sync_pull")
+        _ok("Данные загружены из GitHub")
+        await _add_rating("sync_pull")
     except Exception as e:
         _err(f"Ошибка загрузки: {e}")
-        logger.exception("GitHub pull failed")
+    # Убираем вызов _press_enter_to_continue()
 
 
-async def set_search_mode():
-    global search_mode
-    current = "онлайн" if search_mode == "online" else "офлайн"
-    mode = await _ask(f"Выберите режим поиска: 1 - офлайн (быстро, локальная база), 2 - онлайн (поиск в GitHub) [текущий: {current}]", "1")
+async def set_search_mode_menu():
+    cur = "онлайн" if search_mode == "online" else "офлайн"
+    mode = await _ask(f"Режим: 1-офлайн (локальная БД) / 2-онлайн (GitHub) [текущий: {cur}]", "1")
     if mode == "2":
         save_search_mode("online")
-        _ok("Режим поиска изменён на ОНЛАЙН (поиск в GitHub)")
+        _ok("Режим поиска: ОНЛАЙН")
     else:
         save_search_mode("offline")
-        _ok("Режим поиска изменён на ОФЛАЙН (локальная база)")
+        _ok("Режим поиска: ОФЛАЙН")
     console.print()
+    await _press_enter_to_continue()
 
 
-async def show_rating():
-    rating = await _get_rating_remote()
+async def full_club_collect(tag: str):
+    tag_clean = tag.strip().upper().lstrip("#")
+    data = await _nest_get(f"/club/{tag_clean}")
+    if not data and HAS_BRAWL_KEYS and club_col:
+        data = await club_col.collect(tag_clean)
+    if not data:
+        _err("Клуб не найден")
+        await _press_enter_to_continue()
+        return
+    members = data.get("members", [])
+    if not members and db:
+        members = await db.get_club_members(tag_clean)
+    if not members:
+        _err("Нет участников")
+        await _press_enter_to_continue()
+        return
+    _info(f"Загрузка данных {len(members)} участников...")
+    loaded = 0
+    with Progress(TextColumn("[progress.description]{task.description}"), BarColumn(),
+                   TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                   TimeElapsedColumn(), console=console, transient=True) as prog:
+        task = prog.add_task("[cyan]Участники...", total=len(members))
+        for m in members:
+            mtag = (m.get("tag") or m.get("player_tag","")).lstrip("#")
+            if mtag and player_col:
+                await player_col.collect(mtag, force_update=False)
+            loaded += 1
+            prog.update(task, advance=1)
+    _ok(f"Собрано данных участников: {loaded}")
     console.print()
-    _hr("⭐ Ваш рейтинг")
-    _kv("Очки", str(rating), "dim", "yellow")
-    _info("Рейтинг повышается за каждое полезное действие: просмотр профилей, добавление игроков/клубов, создание PNG, поиск и т.д.")
-    _hr()
-    console.print()
+    await _add_rating("full_club_collect", tag_clean)
+    await _press_enter_to_continue()
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# Интерактивное меню
-# ═════════════════════════════════════════════════════════════════════════════
+async def check_team_game():
+    tags_raw = await _ask("Теги игроков через запятую (2-3)")
+    if not tags_raw:
+        return
+    tags = [t.strip().upper().lstrip("#") for t in tags_raw.split(",") if t.strip()]
+    if len(tags) < 2:
+        _err("Нужно минимум 2 тега")
+        await _press_enter_to_continue()
+        return
+    data = await _nest_get("/team/stats", {"tags": ",".join(tags)})
+    if data and data.get("total_battles", 0) > 0:
+        _ok(f"Найдено {data['total_battles']} совместных боёв, победы: {data.get('total_wins',0)}")
+    else:
+        _info("Нет данных о совместных боях (нужны данные из официального API)")
+    await _add_rating("check_team")
+    await _press_enter_to_continue()
+
+
+# ═══════════════════════════════════════════════════════════════════
+# MENU (modernized)
+# ═══════════════════════════════════════════════════════════════════
+
+MENU_ITEMS = [
+    ("player",            "👤 Профиль игрока"),
+    ("player_history",    "📈 История трофеев игрока"),
+    ("player_battles",    "📜 Последние бои игрока"),
+    ("player_battles_stats","📊 Статистика боёв"),
+    ("player_brawlers",   "🤖 Бравлеры игрока"),
+    ("player_mastery",    "⭐ Мастерство игрока"),
+    ("compare_players",   "⚔️  Сравнить игроков"),
+    ("update_player",     "🔄 Принудительное обновление"),
+    ("save_png",          "📸 Сохранить статистику в PNG"),
+    ("random_player",     "🎲 Случайный игрок из базы"),
+    ("club",              "🏢 Информация о клубе"),
+    ("club_members",      "👥 Участники клуба"),
+    ("club_history",      "📈 История клуба"),
+    ("full_club",         "📊 Полный сбор данных клуба"),
+    ("search_players",    "🔍 Поиск игроков по имени"),
+    ("search_clubs_name", "🔍 Поиск клубов по названию"),
+    ("advanced_search",   "🔍 Расширенный поиск"),
+    ("search_existing",   "🔍 Поиск существующих игроков"),
+    ("search_clubs",      "🔍 Поиск существующих клубов"),
+    ("check_file",        "📁 Проверить теги из файла"),
+    ("check_team",        "🎮 Командная игра по тегам"),
+    ("maps",              "🗺️ Статистика карт"),
+    ("map_detail",        "🗺️ Конкретная карта"),
+    ("team_stats",        "🎮 Командная статистика"),
+    ("rankings_players",  "🏆 Топ игроков (BrawlNest)"),
+    ("rankings_clubs",    "🏅 Топ клубов (BrawlNest)"),
+    ("brawlers",          "🤖 Список бравлеров"),
+    ("brawler_rankings",  "🏆 Рейтинг по бравлеру"),
+    ("rotation",          "🎡 Ротация событий"),
+    ("rank_players_brawl","🏆 Топ игроков (глобальный)"),
+    ("rank_clubs_brawl",  "🏅 Топ клубов (глобальный)"),
+    ("locations",         "🌍 Список стран"),
+    ("powerplay",         "⚡ Сезоны Power Play"),
+    ("gen_team_code",     "🔑 Создать код команды"),
+    ("check_team_code",   "✅ Проверить код команды"),
+    ("gen_random_codes",  "🎲 Генерация случайных кодов"),
+    ("my_rating",         "⭐ Мой рейтинг"),
+    ("rating_leaderboard","🏆 Таблица лидеров"),
+    ("nodes",             "🌐 Активные узлы сети"),
+    ("api_status",        "🔑 Статус API ключей"),
+    ("input_key",         "🔑 Ввести API-ключ"),
+    ("fill_db",           "📥 Заполнить базу данных"),
+    ("continuous_fill",   "🔄 Непрерывное заполнение"),
+    ("sync_push",         "⬆️ Выгрузить данные в GitHub"),
+    ("sync_pull",         "⬇️ Загрузить данные из GitHub"),
+    ("set_mode",          "🌐 Режим поиска (офлайн/онлайн)"),
+    ("exit",              "🚪 Выход"),
+]
+
+_NAV = list(range(len(MENU_ITEMS)))
+
+
+def load_menu_pos() -> int:
+    try:
+        if os.path.exists(MENU_POS_FILE):
+            with open(MENU_POS_FILE, "r") as f:
+                s = f.read().strip()
+                if s:
+                    v = int(s)
+                    if 0 <= v < len(_NAV):
+                        return v
+    except Exception:
+        pass
+    return APP_CFG.get("last_menu_pos", 0)
+
+
+def save_menu_pos(idx: int):
+    try:
+        with open(MENU_POS_FILE, "w") as f:
+            f.write(str(int(idx)))
+    except Exception:
+        pass
+
+
+def _build_grid_fragments(idx_ptr: List[int], term_width: int, columns: int = 3) -> List:
+    """
+    Build formatted text fragments for the grid menu.
+    Uses column-major ordering for intuitive vertical navigation.
+    """
+    total_items = len(_NAV)
+    if total_items == 0:
+        return [("", "No menu items")]
+    # adapt columns based on terminal width or fallback to 1
+    min_col_width = 28  # minimal comfortable column width
+    max_columns = max(1, term_width // min_col_width)
+    columns = min(columns, max_columns)
+    if columns < 1:
+        columns = 1
+    rows = ceil(total_items / columns)
+    # compute equal width columns with safe padding
+    col_padding = 2
+    col_width = max(min_col_width, (term_width - (columns - 1) * col_padding) // columns)
+    # inner width for label (reserve 3 for prefix and spacing)
+    inner_width = max(8, col_width - 3)
+
+    fragments = []
+    cur = idx_ptr[0]
+    # build row by row, each row contains columns
+    for r in range(rows):
+        for c in range(columns):
+            idx = c * rows + r
+            if idx < total_items:
+                key, label = MENU_ITEMS[_NAV[idx]]
+                # truncate label gracefully
+                lab = label
+                if len(lab) > inner_width:
+                    lab = lab[:inner_width - 1] + "…"
+                padding = inner_width - len(lab)
+                prefix = "  "
+                style = "class:item"
+                if idx == cur:
+                    prefix = "❯ "
+                    style = "class:selected"
+                    text = f"{prefix}{lab}{' ' * padding}"
+                else:
+                    text = f"  {lab}{' ' * padding}"
+                fragments.append((style, text))
+            else:
+                fragments.append(("", " " * (col_width)))
+            # spacing between columns
+            if c != columns - 1:
+                fragments.append(("", " " * col_padding))
+        fragments.append(("", "\n"))
+    return fragments
+
+
+def _render_header_panel(rating: int, term_width: int) -> List:
+    """
+    Render a compact header (as formatted fragments) to show above the menu.
+    """
+    title = "BrawlNest"
+    subtitle = f"Server: {BASE_URL}  |  Mode: {search_mode}  |  Keys: {len(API_KEYS)}  |  ⭐ {rating}"
+    title_line = f" {title} "
+    subtitle_line = f" {subtitle} "
+    if len(subtitle_line) > term_width - 2:
+        subtitle_line = subtitle_line[:term_width - 5] + "..."
+    fragments = []
+    fragments.append(("class:header.title", title_line.ljust(term_width)))
+    fragments.append(("", "\n"))
+    fragments.append(("class:header.meta", subtitle_line.ljust(term_width)))
+    fragments.append(("", "\n\n"))
+    return fragments
+
+
+def _render_footer_help(term_width: int) -> List:
+    hint = "↑↓ — перемещение  ←→ — колонка  Tab/Shift+Tab — циклически  Enter — выбор  q/Ctrl+C — выход"
+    if len(hint) > term_width - 2:
+        hint = "↑↓ Tab Enter ←→ q"
+    return [("class:footer", hint[:term_width])]
+
+
+def _run_menu() -> str:
+    """
+    Synchronous menu runner for use inside an executor.
+    Returns the command key of the chosen menu item.
+    """
+    idx_ptr = [load_menu_pos()]
+    result: List[Optional[str]] = [None]
+
+    try:
+        term_size = shutil.get_terminal_size()
+        term_width = term_size.columns
+    except Exception:
+        term_width = 100
+
+    columns = 3
+    min_col_width = 28
+    max_columns = max(1, term_width // min_col_width)
+    columns = min(columns, max_columns)
+    if columns < 1:
+        columns = 1
+
+    menu_ctrl = FormattedTextControl(text=lambda: _build_grid_fragments(idx_ptr, term_width, columns), focusable=True)
+    footer_ctrl = FormattedTextControl(text=lambda: _render_footer_help(term_width), focusable=False)
+
+    kb = KeyBindings()
+
+    total_items = len(_NAV)
+    rows = ceil(total_items / columns)
+
+    def idx_to_row_col(idx: int):
+        row = idx % rows
+        col = idx // rows
+        return row, col
+
+    def row_col_to_idx(row: int, col: int):
+        idx = col * rows + row
+        if idx >= total_items:
+            while idx >= total_items and col >= 0:
+                col -= 1
+                idx = col * rows + row
+            if idx < 0:
+                idx = 0
+        return max(0, min(idx, total_items - 1))
+
+    @kb.add("up")
+    def _up(event):
+        row, col = idx_to_row_col(idx_ptr[0])
+        row = (row - 1) % rows
+        idx_ptr[0] = row_col_to_idx(row, col)
+        menu_ctrl.text = lambda: _build_grid_fragments(idx_ptr, term_width, columns)
+
+    @kb.add("down")
+    def _down(event):
+        row, col = idx_to_row_col(idx_ptr[0])
+        row = (row + 1) % rows
+        idx_ptr[0] = row_col_to_idx(row, col)
+        menu_ctrl.text = lambda: _build_grid_fragments(idx_ptr, term_width, columns)
+
+    @kb.add("left")
+    def _left(event):
+        row, col = idx_to_row_col(idx_ptr[0])
+        col = (col - 1) % columns
+        idx_ptr[0] = row_col_to_idx(row, col)
+        menu_ctrl.text = lambda: _build_grid_fragments(idx_ptr, term_width, columns)
+
+    @kb.add("right")
+    def _right(event):
+        row, col = idx_to_row_col(idx_ptr[0])
+        col = (col + 1) % columns
+        idx_ptr[0] = row_col_to_idx(row, col)
+        menu_ctrl.text = lambda: _build_grid_fragments(idx_ptr, term_width, columns)
+
+    @kb.add("tab")
+    def _tab(event):
+        idx_ptr[0] = (idx_ptr[0] + 1) % total_items
+        menu_ctrl.text = lambda: _build_grid_fragments(idx_ptr, term_width, columns)
+
+    @kb.add("s-tab")
+    def _stabb(event):
+        idx_ptr[0] = (idx_ptr[0] - 1) % total_items
+        menu_ctrl.text = lambda: _build_grid_fragments(idx_ptr, term_width, columns)
+
+    @kb.add("enter")
+    def _enter(event):
+        result[0] = MENU_ITEMS[_NAV[idx_ptr[0]]][0]
+        save_menu_pos(idx_ptr[0])
+        event.app.exit()
+
+    @kb.add("q")
+    @kb.add("c-c")
+    def _quit(event):
+        result[0] = "exit"
+        save_menu_pos(idx_ptr[0])
+        event.app.exit()
+
+    body = HSplit([
+        Window(content=menu_ctrl, dont_extend_height=True, always_hide_cursor=False),
+        Window(height=1, char="", style=""),
+        Window(content=footer_ctrl, height=1, dont_extend_height=True),
+    ])
+
+    app = PTApp(layout=Layout(body), key_bindings=kb, style=PT_STYLE,
+                full_screen=False, mouse_support=False)
+
+    try:
+        app.run()
+    except Exception:
+        pass
+
+    return result[0] or "exit"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# MAIN LOOP (modified to print rich header panel before menu)
+# ═══════════════════════════════════════════════════════════════════
 
 async def interactive_menu():
+    await ensure_api_key()
+    global search_mode
     console.print()
-    console.print("  [bold white]Brawl Stats[/bold white]  [dim]CLI[/dim]")
-    rating = await _get_rating_remote()
-    console.print(f"  [dim]Ключей: {len(API_KEYS)}[/dim]  |  ⭐ Рейтинг: {rating}")
-    mode_str = "онлайн" if search_mode == "online" else "офлайн"
-    console.print(f"  [dim]Режим поиска: {mode_str}[/dim]")
-    if not HAS_API_KEYS:
-        console.print("  [yellow]⚠️ API ключи отсутствуют — некоторые функции недоступны[/yellow]")
-    console.print()
-
     while True:
-        console.print("  [dim]↑↓ Tab — навигация   Enter — выбор   q — выход[/dim]")
-        console.print()
+        try:
+            rating = await _get_rating()
+        except Exception:
+            rating = 0
+        console.clear()
+        header_table = Table.grid(expand=True)
+        header_table.add_column(ratio=1)
+        header_table.add_column(width=40, justify="right")
+        header_table.add_row(
+            Text("BrawlNest", style="bold cyan"),
+            Text(f"⭐ {rating}", style="bold #facc15")
+        )
+        meta = Text(f"Server: {BASE_URL}  •  Mode: {search_mode}  •  Brawl keys: {len(API_KEYS)}", style="dim")
+        panel = Panel.fit(
+            Align.left(header_table) if header_table else Text("BrawlNest"),
+            subtitle=meta,
+            box=box.ROUNDED, border_style="bright_blue"
+        )
+        console.print(panel)
+        console.print()  # spacing
 
+        console.print("  [dim]↑↓/←→ — навигация   Tab/Shift+Tab — циклическая   Enter — выбор   q — выход[/dim]\n")
         loop = asyncio.get_event_loop()
         choice = await loop.run_in_executor(None, _run_menu)
         console.print()
-
         if not choice or choice == "exit":
             console.print("  [dim]До свидания![/dim]\n")
             break
 
-        elif choice == "player":
-            tag = await _ask("Тег игрока (без #, только символы 0-9, A-Z)")
-            if tag:
-                await show_player(tag)
-
-        elif choice == "battles":
+        if choice == "player":
             tag = await _ask("Тег игрока (без #)")
-            limit = await _ask_int("Количество боёв", 10)
-            if tag:
-                await show_battles(tag, limit)
+            if tag: await show_player(tag)
+
+        elif choice == "player_history":
+            tag  = await _ask("Тег игрока")
+            days = await _ask_int("Дней истории", 30)
+            if tag: await show_player_history(tag, days)
+
+        elif choice == "player_battles":
+            tag   = await _ask("Тег игрока")
+            limit = await _ask_int("Количество боёв", 20)
+            if tag: await show_player_battles(tag, limit)
+
+        elif choice == "player_battles_stats":
+            tag = await _ask("Тег игрока")
+            if tag: await show_player_battles_stats(tag)
+
+        elif choice == "player_brawlers":
+            tag = await _ask("Тег игрока")
+            if tag: await show_player_brawlers(tag)
+
+        elif choice == "player_mastery":
+            tag = await _ask("Тег игрока")
+            if tag: await show_player_mastery(tag)
+
+        elif choice == "compare_players":
+            await compare_players()
+
+        elif choice == "update_player":
+            tag = await _ask("Тег игрока")
+            if tag: await show_player(tag, force_update=True)
+
+        elif choice == "save_png":
+            tag = await _ask("Тег игрока")
+            if tag: await save_player_png(tag)
+
+        elif choice == "random_player":
+            await show_random_player()
 
         elif choice == "club":
             tag = await _ask("Тег клуба (без #)")
-            if tag:
-                await show_club(tag, show_members=False)
+            if tag: await show_club(tag, False)
 
         elif choice == "club_members":
             tag = await _ask("Тег клуба (без #)")
-            if tag:
-                await show_club(tag, show_members=True)
+            if tag: await show_club(tag, True)
+
+        elif choice == "club_history":
+            tag  = await _ask("Тег клуба")
+            days = await _ask_int("Дней истории", 30)
+            if tag: await show_club_history(tag, days)
 
         elif choice == "full_club":
-            tag = await _ask("Тег клуба (без #)")
-            if tag:
-                await full_club_collect(tag)
+            tag = await _ask("Тег клуба")
+            if tag: await full_club_collect(tag)
 
-        elif choice == "update":
-            tag = await _ask("Тег игрока (без #)")
-            if tag:
-                await show_player(tag, force_update=True)
+        elif choice == "search_players":
+            await search_players_by_name()
 
-        elif choice == "search_name":
-            await search_player_by_name()
+        elif choice == "search_clubs_name":
+            await search_clubs_by_name()
 
-        elif choice == "search":
-            n = await _ask_int("Количество запросов", 1000)
-            out = await _ask("Файл для сохранения [The_players.txt]")
-            await search_players(n, out if out else None)
+        elif choice == "advanced_search":
+            await advanced_search_menu()
 
-        elif choice == "checkfile":
-            path = await _ask("Путь к файлу")
-            if path:
-                await check_players_from_file(path)
-
-        elif choice == "checkfile_active":
-            path = await _ask("Путь к файлу с тегами")
-            if path:
-                await check_active_players_from_file(path)
-
-        elif choice == "random_player":
-            await show_random_existing_player()
-
-        elif choice == "save_png":
-            tag = await _ask("Тег игрока (без #)")
-            if tag:
-                await save_player_stats_png(tag)
-
-        elif choice == "gen_codes":
-            await generate_command_codes()
-
-        elif choice == "check_club":
-            tag = await _ask("Тег клуба (без #)")
-            if tag:
-                await check_club_by_tag(tag)
+        elif choice == "search_existing":
+            await search_existing_players()
 
         elif choice == "search_clubs":
-            n = await _ask_int("Количество запросов", 1000)
-            out = await _ask("Файл для сохранения", "existing_clubs.txt")
-            await search_existing_clubs(n, out if out else None)
+            await search_existing_clubs()
 
-        elif choice == "search_club_name":
-            await search_club_by_name()
+        elif choice == "check_file":
+            await check_players_from_file()
 
         elif choice == "check_team":
             await check_team_game()
 
+        elif choice == "maps":
+            limit = await _ask_int("Количество карт", 30)
+            await show_maps(limit)
+
+        elif choice == "map_detail":
+            await show_map_stats()
+
+        elif choice == "team_stats":
+            await show_team_stats()
+
+        elif choice == "rankings_players":
+            limit = await _ask_int("Количество", 20)
+            await show_rankings_players(limit)
+
+        elif choice == "rankings_clubs":
+            limit = await _ask_int("Количество", 20)
+            await show_rankings_clubs(limit)
+
         elif choice == "brawlers":
             await show_brawlers()
+
+        elif choice == "brawler_rankings":
+            await show_brawler_rankings()
+
         elif choice == "rotation":
             await show_event_rotation()
-        elif choice == "rank_players":
-            region = await _ask("Регион [global]") or "global"
-            await show_rankings(region, "players")
-        elif choice == "rank_clubs":
-            region = await _ask("Регион [global]") or "global"
-            await show_rankings(region, "clubs")
+
+        elif choice == "rank_players_brawl":
+            await show_global_rankings("players")
+
+        elif choice == "rank_clubs_brawl":
+            await show_global_rankings("clubs")
+
         elif choice == "locations":
             await show_locations()
+
         elif choice == "powerplay":
-            region = await _ask("Регион [global]") or "global"
-            await show_powerplay_seasons(region)
-        elif choice == "check_keys":
-            await check_api_keys()
-        elif choice == "enter_api_key":
-            await input_api_key()
-        elif choice == "set_mode":
-            await set_search_mode()
+            await show_powerplay_seasons()
+
+        elif choice == "gen_team_code":
+            await generate_team_code()
+
+        elif choice == "check_team_code":
+            await check_team_code()
+
+        elif choice == "gen_random_codes":
+            await generate_random_codes()
+
+        elif choice == "my_rating":
+            await show_my_rating()
+
+        elif choice == "rating_leaderboard":
+            await show_rating_leaderboard()
+
+        elif choice == "nodes":
+            await show_nodes()
+
+        elif choice == "api_status":
+            await show_api_status()
+
+        elif choice == "input_key":
+            await input_api_key_manual()
+
         elif choice == "fill_db":
-            n = await _ask_int("Количество запросов (чем больше, тем больше игроков будет найдено)", 1000)
-            await fill_database(n)
+            await fill_database()
+
         elif choice == "continuous_fill":
             await continuous_fill()
+
         elif choice == "sync_push":
-            await sync_push_to_github()
+            await sync_push()
+
         elif choice == "sync_pull":
-            await sync_pull_from_github()
-        elif choice == "rating":
-            await show_rating()
+            await sync_pull()
 
+        elif choice == "set_mode":
+            await set_search_mode_menu()
 
-# ═════════════════════════════════════════════════════════════════════════════
-# Точка входа
-# ═════════════════════════════════════════════════════════════════════════════
 
 async def main():
     await _init()
-
     if SYNC_CFG.get("auto_pull_on_start", False):
-        await sync_pull_from_github()
+        try:
+            await sync_pull()
+        except Exception:
+            pass
 
     if len(sys.argv) > 1:
         cmd = sys.argv[1].lower()
-        if cmd == "player" and len(sys.argv) > 2:
-            await show_player(sys.argv[2], True)
-        elif cmd == "battles" and len(sys.argv) > 2:
-            lim = int(sys.argv[3]) if len(sys.argv) > 3 and sys.argv[3].isdigit() else 10
-            await show_battles(sys.argv[2], lim)
-        elif cmd == "club" and len(sys.argv) > 2:
-            mems = len(sys.argv) > 3 and sys.argv[3].lower() == "members"
-            await show_club(sys.argv[2], mems)
-        elif cmd == "fullclub" and len(sys.argv) > 2:
-            await full_club_collect(sys.argv[2])
-        elif cmd == "search_name":
-            await search_player_by_name()
-        elif cmd == "search":
-            n = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else 1000
-            await search_players(n)
-        elif cmd == "checkfile" and len(sys.argv) > 2:
-            await check_players_from_file(sys.argv[2])
-        elif cmd == "checkfile_active" and len(sys.argv) > 2:
-            await check_active_players_from_file(sys.argv[2])
-        elif cmd == "randomplayer":
-            await show_random_existing_player()
-        elif cmd == "gen_codes":
-            await generate_command_codes()
-        elif cmd == "check_club" and len(sys.argv) > 2:
-            await check_club_by_tag(sys.argv[2])
-        elif cmd == "search_clubs":
-            n = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else 1000
-            out = sys.argv[3] if len(sys.argv) > 3 else None
-            await search_existing_clubs(n, out)
-        elif cmd == "search_club_name":
-            await search_club_by_name()
-        elif cmd == "check_team":
-            await check_team_game()
-        elif cmd == "brawlers":
-            await show_brawlers()
-        elif cmd == "rotation":
-            await show_event_rotation()
-        elif cmd == "rankplayers" and len(sys.argv) > 2:
-            await show_rankings(sys.argv[2], "players")
-        elif cmd == "rankclubs" and len(sys.argv) > 2:
-            await show_rankings(sys.argv[2], "clubs")
-        elif cmd == "locations":
-            await show_locations()
-        elif cmd == "powerplay" and len(sys.argv) > 2:
-            await show_powerplay_seasons(sys.argv[2])
-        elif cmd == "checkkeys":
-            await check_api_keys()
-        elif cmd == "enter_api_key":
-            await input_api_key()
-        elif cmd == "set_mode":
-            await set_search_mode()
-        elif cmd == "fill_db":
-            n = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else 1000
-            await fill_database(n)
-        elif cmd == "continuous_fill":
-            await continuous_fill()
-        elif cmd == "syncpush":
-            await sync_push_to_github()
-        elif cmd == "syncpull":
-            await sync_pull_from_github()
-        elif cmd == "rating":
-            await show_rating()
+        tag = sys.argv[2] if len(sys.argv) > 2 else ""
+        await ensure_api_key()
+        if cmd == "player" and tag:        await show_player(tag, True)
+        elif cmd == "battles" and tag:     await show_player_battles(tag)
+        elif cmd == "history" and tag:     await show_player_history(tag)
+        elif cmd == "brawlers" and tag:    await show_player_brawlers(tag)
+        elif cmd == "club" and tag:        await show_club(tag, True)
+        elif cmd == "club_history" and tag:await show_club_history(tag)
+        elif cmd == "maps":                await show_maps()
+        elif cmd == "rankings":            await show_rankings_players()
+        elif cmd == "nodes":               await show_nodes()
+        elif cmd == "status":              await show_api_status()
+        elif cmd == "rating":              await show_my_rating()
+        elif cmd == "gen_code":            await generate_team_code()
+        elif cmd == "search":              await search_players_by_name()
+        elif cmd == "fill":                await fill_database()
+        elif cmd == "syncpush":            await sync_push()
+        elif cmd == "syncpull":            await sync_pull()
         else:
-            console.print(
-                "  Использование: python cli.py "
-                "[player|battles|club|fullclub|search|checkfile|checkfile_active|randomplayer|gen_codes"
-                "|check_club|search_clubs|search_club_name|check_team|brawlers|rotation|rankplayers|rankclubs|locations|powerplay|checkkeys|enter_api_key|set_mode|fill_db|continuous_fill|syncpush|syncpull|rating] [аргументы]\n"
-                "  Без аргументов — интерактивное меню"
-            )
+            console.print("Команды: player|battles|history|brawlers|club|maps|rankings|nodes|status|rating|gen_code|search|fill|syncpush|syncpull")
     else:
         await interactive_menu()
 
     if SYNC_CFG.get("auto_push_on_exit", False):
-        await sync_push_to_github()
-
+        try:
+            await sync_push()
+        except Exception:
+            pass
     try:
-        await api.close()
-        await db.close()
+        if api:
+            await api.close()
+        if db:
+            await db.close()
     except Exception:
         pass
 
@@ -3108,5 +2234,5 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except (KeyboardInterrupt, asyncio.CancelledError):
-        console.print("\n  [dim]Прервано — данные сохранены[/dim]\n")
+        console.print("\n  [dim]Прервано[/dim]\n")
         sys.exit(0)

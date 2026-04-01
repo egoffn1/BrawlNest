@@ -1,27 +1,55 @@
 version: "3.9"
 
 services:
-  bot:
-    build: .
-    container_name: brawl_bot
-    command: python main.py bot
-    env_file: .env
-    volumes:
-      - ./brawl_stats.db:/app/brawl_stats.db
-      - ./logs:/app/logs
-      - ./The_players.txt:/app/The_players.txt
+  postgres:
+    image: postgres:15-alpine
     restart: unless-stopped
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: pass
+      POSTGRES_DB: brawlnest
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d brawlnest"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   api:
     build: .
-    container_name: brawl_api
-    command: python main.py api
-    env_file: .env
-    ports:
-      - "8000:8000"
-    volumes:
-      - ./brawl_stats.db:/app/brawl_stats.db
-      - ./logs:/app/logs
     restart: unless-stopped
+    ports:
+      - "${API_PORT:-80}:80"
     depends_on:
-      - bot
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      POSTGRES_DSN: postgresql://user:pass@postgres:5432/brawlnest
+      REDIS_URL: redis://redis:6379
+      NODE_ADDRESS: http://api:80
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 20s
+      retries: 3
+
+volumes:
+  pgdata:
+  redisdata:
