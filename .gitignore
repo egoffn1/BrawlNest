@@ -1,12 +1,50 @@
+```
+# Python
 __pycache__/
 *.pyc
-*.db
-*.db-shm
-*.db-wal
-logs/
+*.pyo
+*.pyd
+*.py~
+
+# Database
+brawl_stats.db
+
+# Data files
+.brawlnest_data
+
+# Environment
 .env
-The_players.txt
-existing_clubs.txt
-search_mode.txt
-temp_found_players.txt
-run.sh
+.env.local
+*.env.*
+
+# Dependencies
+.venv/
+venv/
+pip-log.txt
+pip-selfcheck.json
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*~
+.DS_Store
+Thumbs.db
+
+# Coverage
+.coverage
+coverage/
+htmlcov/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+```

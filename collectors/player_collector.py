@@ -2,6 +2,7 @@ from typing import Optional, Dict
 from datetime import datetime, timezone
 from api_client import BrawlAPIClient
 from database import Database
+from remote_storage import storage as remote_storage
 
 
 class PlayerCollector:
@@ -38,10 +39,27 @@ class PlayerCollector:
         }
 
         await self.db.upsert_player(player_data)
+        
+        # Сохраняем полные данные игрока в удаленное хранилище
+        safe_tag = normalized.replace("#", "")
+        remote_storage.write_data("players", safe_tag, data)
 
         battlelog = await self.api.get_battlelog(normalized, force=force_update)
         if battlelog and "items" in battlelog:
             for battle in battlelog["items"]:
                 await self.db.upsert_battle(normalized, battle)
+                
+                # Сохраняем бои в удаленное хранилище (группируем по тегу игрока)
+                battle_with_meta = {
+                    **battle,
+                    "player_tag": normalized,
+                    "collected_at": datetime.now(timezone.utc).isoformat()
+                }
+                # Используем комбинацию тега и времени боя как идентификатор
+                battle_time = battle.get("battleTime", "")[:16].replace("-", "").replace(":", "")
+                remote_storage.write_data("battles", f"{safe_tag}_{battle_time}", battle_with_meta)
+
+        # Коммитим изменения пакетно
+        remote_storage.commit_changes(f"Обновлены данные игрока {normalized}")
 
         return player_data

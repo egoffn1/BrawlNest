@@ -124,6 +124,13 @@ class Database:
                 rating INTEGER DEFAULT 0,
                 last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
+
+            CREATE TABLE IF NOT EXISTS team_codes (
+                code TEXT PRIMARY KEY,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMP NOT NULL,
+                is_used INTEGER DEFAULT 0
+            );
         """)
         await conn.commit()
 
@@ -425,3 +432,106 @@ class Database:
         async with conn.execute(sql, params) as cur:
             rows = await cur.fetchall()
         return [dict(row) for row in rows]
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Team Codes (коды командной игры)
+    # ─────────────────────────────────────────────────────────────────────────
+    async def save_team_code(self, code: str, expires_at: str):
+        """Сохраняет код команды в базу данных."""
+        conn = await self._conn_or_raise()
+        await conn.execute("""
+            INSERT OR REPLACE INTO team_codes (code, expires_at, is_used) VALUES (?, ?, 0)
+        """, (code, expires_at))
+        await conn.commit()
+
+    async def get_valid_team_code(self, code: str) -> Optional[Dict]:
+        """Проверяет, существует ли код и не истёк ли он."""
+        conn = await self._conn_or_raise()
+        now = datetime.now(timezone.utc).isoformat()
+        async with conn.execute(
+            "SELECT * FROM team_codes WHERE code=? AND expires_at > ? AND is_used=0",
+            (code, now)
+        ) as cur:
+            row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def get_all_valid_team_codes(self, limit: int = 100) -> List[Dict]:
+        """Получает все действительные (неистёкшие) коды."""
+        conn = await self._conn_or_raise()
+        now = datetime.now(timezone.utc).isoformat()
+        async with conn.execute(
+            "SELECT * FROM team_codes WHERE expires_at > ? AND is_used=0 ORDER BY created_at DESC LIMIT ?",
+            (now, limit)
+        ) as cur:
+            rows = await cur.fetchall()
+        return [dict(row) for row in rows]
+
+    async def mark_code_as_used(self, code: str):
+        """Отмечает код как использованный."""
+        conn = await self._conn_or_raise()
+        await conn.execute(
+            "UPDATE team_codes SET is_used=1 WHERE code=?",
+            (code,)
+        )
+        await conn.commit()
+
+    async def cleanup_expired_codes(self):
+        """Удаляет все истёкшие коды из базы."""
+        conn = await self._conn_or_raise()
+        now = datetime.now(timezone.utc).isoformat()
+        await conn.execute(
+            "DELETE FROM team_codes WHERE expires_at <= ?",
+            (now,)
+        )
+        await conn.commit()
+
+    async def count_valid_codes(self) -> int:
+        """Возвращает количество действительных кодов."""
+        conn = await self._conn_or_raise()
+        now = datetime.now(timezone.utc).isoformat()
+        async with conn.execute(
+            "SELECT COUNT(*) as cnt FROM team_codes WHERE expires_at > ? AND is_used=0",
+            (now,)
+        ) as cur:
+            row = await cur.fetchone()
+        return row["cnt"] if row else 0
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Синхронизация с удалённым хранилищем (BrawlNest)
+    # ─────────────────────────────────────────────────────────────────────────
+    def sync_codes_to_remote(self, codes: List[Dict]):
+        """Синхронизирует коды команд с удалённым хранилищем BrawlNest."""
+        from remote_storage import storage
+        # Сохраняем все коды как один файл списка
+        storage.write_data('codes', 'team_codes_list', {
+            'codes': codes,
+            'count': len(codes),
+            'generated_at': datetime.now(timezone.utc).isoformat()
+        })
+        # Также сохраняем каждый код отдельно для быстрого доступа
+        for code_info in codes:
+            code = code_info.get('code')
+            if code:
+                storage.write_data('codes', code, code_info)
+        storage.commit_changes("Update team codes")
+
+    def sync_player_to_remote(self, player_data: Dict):
+        """Синхронизирует данные игрока с удалённым хранилищем."""
+        from remote_storage import storage
+        tag = player_data.get('tag', '').lstrip('#')
+        if tag:
+            storage.write_data('players', tag, player_data)
+
+    def sync_battle_to_remote(self, battle_data: Dict):
+        """Синхронизирует данные боя с удалённым хранилищем."""
+        from remote_storage import storage
+        battle_id = battle_data.get('id', battle_data.get('battleTime', 'unknown'))
+        safe_id = "".join(c for c in str(battle_id) if c.isalnum() or c in '-_')
+        storage.write_data('battles', safe_id, battle_data)
+
+    def sync_club_to_remote(self, club_data: Dict):
+        """Синхронизирует данные клуба с удалённым хранилищем."""
+        from remote_storage import storage
+        tag = club_data.get('tag', '').lstrip('#')
+        if tag:
+            storage.write_data('clubs', tag, club_data)

@@ -38,6 +38,7 @@ from collectors.club_collector import ClubCollector
 from utils.logger import setup_logger
 from utils.tag_generator import generate_tags
 from sync_github import GitHubSync
+from remote_storage import storage as remote_storage
 
 # Проверка наличия библиотек для PNG
 PNG_AVAILABLE = False
@@ -67,84 +68,381 @@ PT_STYLE = PTStyle.from_dict({
 
 # ── названия режимов ────────────────────────────────────────────────────────
 MODE_NAMES = {
-    "soloShowdown": "🌵 Столкновение (соло)",
-    "duoShowdown":  "👥 Столкновение (дуо)",
-    "brawlBall":    "⚽ Броулбол",
-    "knockout":     "🥊 Нокаут",
-    "heist":        "💰 Ограбление",
-    "hotZone":      "🔥 Горячая зона",
-    "bounty":       "🏆 Охота",
-    "gemGrab":      "💎 Захват кристаллов",
-    "duels":        "⚔️ Дуэли",
-    "wipeout":      "🧹 Зачистка",
-    "basketBrawl":  "🏀 Баскетбой",
-    "roboRumble":   "🤖 Вторжение роботов",
-    "bossFight":    "👾 Битва с боссом",
-    "bigGame":      "🐘 Большая игра",
-    "siege":        "🏰 Осада",
-    "trioShowdown": "👥 Столкновение (трио)",
-    "wipeout5V5":   "🧹 Зачистка 5x5",
-    "knockout5V5":  "🥊 Нокаут 5x5",
-    "ranked":       "🏆 Ранговый режим",
-    "special":      "✨ Особое событие",
-    "unknown":      "❓ Неизвестный режим",
+    # Основные режимы 3x3
+    "gemGrab":       "💎 Захват кристаллов",
+    "brawlBall":     "⚽ Броулбол",
+    "bounty":        "🏆 Охота за головами",
+    "heist":         "💰 Ограбление",
+    "hotZone":       "🔥 Горячая зона",
+    "knockout":      "🥊 Нокаут",
+    "wipeout":       "🧹 Зачистка",
+    
+    # Столкновения
+    "soloShowdown":  "🌵 Столкновение (соло)",
+    "duoShowdown":   "👥 Столкновение (дуо)",
+    "trioShowdown":  "👥 Столкновение (трио)",
+    
+    # Особые режимы
+    "duels":         "⚔️ Дуэли",
+    "basketBrawl":   "🏀 Баскетбой",
+    "siege":         "🏰 Осада",
+    "ranked":        "🏆 Ранговый бой",
+    
+    # Режимы 5x5
+    "wipeout5V5":    "🧹 Зачистка 5x5",
+    "knockout5V5":   "🥊 Нокаут 5x5",
+    "brawlBall5V5":  "⚽ Броулбол 5x5",
+    "gemGrab5V5":    "💎 Захват кристаллов 5x5",
+    "heist5V5":      "💰 Ограбление 5x5",
+    "bounty5V5":     "🏆 Охота за головами 5x5",
+    "hotZone5V5":    "🔥 Горячая зона 5x5",
+    
+    # Роборубка и события
+    "roboRumble":    "🤖 Роборубка",
+    "bossFight":     "👾 Битва с боссом",
+    "bigGame":       "🐘 Большая игра",
+    "superCity":     "🌃 Супергород",
+    
+    # Сезонные и специальные события
+    "special":       "✨ Особое событие",
+    "championship":  "🏅 Чемпионат",
+    "powerLeague":   "⚡ Силовая лига",
+    "giftUpgrade":   "🎁 Улучшение подарков",
+    "blitz":         "⚡ Блиц",
+    "heavyMetal":    "🎸 Хэви-метал",
+    "brawlerTeam":   "🤝 Команда бойцов",
+    "scoreShowdown": "🎯 Столкновение с очками",
+    "speedRun":      "🏃 Спидран",
+    "defendTheTrophy": "🏆 Защита трофея",
+    "mysteryMode":   "❓ Таинственный режим",
+    "training":      "🎯 Тренировка",
+    "unknown":       "❓ Неизвестный режим",
 }
 
 MAP_TRANSLATIONS = {
+    # Арканы / Кристальная аркана (Gem Grab)
     "Hard Rock Mine": "Хард-рок шахта",
-    "Mushroom Meadow": "Грибная лощина",
-    "Minecart Madness": "Вагонетка без тормозов",
-    "Deathcap Trap": "Смертельная ловушка",
-    "Double Swoosh": "Двойной изгиб",
-    "Angled Mountain": "Угловатая гора",
     "Crystal Cavern": "Кристальная пещера",
-    "Deep Hollows": "Подземные пустоты",
-    "Triple Dribble": "Трипл-дриблинг",
-    "Center Stage": "Центровая площадка",
+    "Double Trouble": "Двойная проблема",
+    "Woodland Lilies": "Лесные лилии",
+    "Safe Zone": "Безопасная зона",
+    "Hidden Path": "Скрытая тропа",
+    "Ruby Pass": "Рубиновый перевал",
+    "Sapphire Plains": "Сапфировые равнины",
+    "Emerald Park": "Изумрудный парк",
+    "Goblin's Den": "Логово гоблина",
+    
+    # Броулбол (Brawl Ball)
+    "Pinhole Punt": "Точный удар",
     "Super Beach": "Суперпляж",
     "Sunny Soccer": "Солнечный футбол",
-    "Pinhole Punt": "Щелевой удар",
-    "Snake Prairie": "Змеиные поля",
-    "Goalkeeper's Dream": "Мечта вратаря",
-    "Pinball Dreams": "Пинбол мечты",
-    "Feast or Famine": "Всё или ничего",
-    "Cavern Churn": "Штольня",
-    "Double Trouble": "Двойные озера",
-    "Death Landscapes": "Озеро мертвецов",
-    "Two Thousand Lakes": "Две тысячи озёр",
-    "Acid Lakes": "Кислотные озёра",
-    "Woodland Lilies": "Лесные лилии",
-    "Lotus": "Лотос",
-    "Starfruit Supernova": "Звёздная сверхновая",
-    "Out in the Open": "В чистом поле",
-    "Goldarm Gulch": "Ущелье Золотого Дракона",
+    "Triple Dribble": "Трипл-дриблинг",
+    "Center Stage": "Центральная сцена",
+    "Backyard Bowl": "Дворовый кубок",
+    "Field Goal": "Удар по воротам",
+    "Neon Field": "Неоновое поле",
+    "Air Sports Bar": "Спортивный бар",
+    "Grass Knot": "Травяной узел",
+    "Penalty Kick": "Пенальти",
+    "Brawl Ball Stadium": "Стадион Броулбола",
+    
+    # Охота за головами (Bounty)
+    "Deathcap Trap": "Ловушка смертошляпа",
+    "Snake Prairie": "Змеиная прерия",
+    "Shooting Star": "Падающая звезда",
+    "Out in the Open": "На открытом месте",
+    "Skull Creek": "Череповой ручей",
+    "Dry Season": "Сухой сезон",
+    "Thousand Lakes": "Тысяча озёр",
+    "Fork in the Road": "Развилка",
+    "Dusty Desert": "Пыльная пустыня",
+    "Golden Lane": "Золотая аллея",
+    
+    # Ограбление (Heist)
+    "Bridge Too Far": "Мост слишком далеко",
+    "Bridge Spam": "Мостовой спам",
+    "Cannon Cart Cove": "Бухта пушечной тележки",
+    "Dark Destiny": "Тёмная судьба",
+    "Hot Maze": "Горячий лабиринт",
+    "Kaboom Canyon": "Каньон Кабум",
+    "Safe Pass": "Безопасный проход",
+    "Secrets of the Storm": "Тайны шторма",
+    "Twilight Breaker": "Сумеречный разрушитель",
+    "Vault Defenders": "Защитники хранилища",
+    
+    # Горячая зона (Hot Zone)
+    "Iron Strait": "Железный пролив",
+    "Ring of Fire": "Огненное кольцо",
+    "Open Zone": "Открытая зона",
+    "Parallel Plays": "Параллельные игры",
+    "Quarter Pounder": "Четвертьфунтер",
+    "Three Lanes": "Три линии",
+    "Trident Grass": "Трезубец травы",
+    "Narrow Passage": "Узкий проход",
+    "Thermal Landscapes": "Термальные ландшафты",
+    "Warped Wasteland": "Искажённая пустошь",
+    
+    # Нокаут (Knockout)
     "Belle's Rock": "Скала Белль",
     "New Horizon": "Новый горизонт",
-    "Beautiful Garden": "Прекрасный сад",
-    "Flaring Phoenix": "Пылающий феникс",
-    "Hot Potato": "Горячая кукуруза",
-    "Safe Zone": "Керки в кустах",
-    "Bridge Too Far": "Поворот на мосту",
-    "GG Mortuary": "Морг Мортиса",
-    "Bridge Spam": "Взятие моста",
-    "Quintillion": "Квинтиллион",
-    "Ring of Fire": "Огненное кольцо",
-    "Parallel Plays": "Параллельная игра",
-    "Open Zone": "Открытая зона",
-    "Dueling Beetles": "Дуэльные жуки",
-    "Layer Cake": "Кремовый торт",
-    "Snake Prairie": "Змеиные степи",
-    "Grand Canal": "Гранд-канал",
-    "Shooting Star": "Падающая звезда",
-    "Storage Sector": "Складской сектор",
-    "Hoop Boot Hill": "Баскетбольный холм",
-    "Jumpscare Lair": "Логово страха",
+    "Deep Hollows": "Глубокие впадины",
+    "Flowing Springs": "Протекающие источники",
+    "Goldarm Gulch": "Золоторучейский овраг",
+    "H is for Holiday": "H — значит праздник",
     "Hideout": "Убежище",
-    "H is for Holiday": "H как праздник",
-    "Mirage Arena": "Арена миражей",
-    "Icy ice park": "Ледяной парк",
-    "Hello Always Ends With a Goodbye": "Привет всегда заканчивается прощанием",
+    "Jumpscare Lair": "Логово прыжка страха",
+    "Lotus": "Лотос",
+    "Mushroom Meadow": "Грибная поляна",
+    "Serene Sands": "Безмятежные пески",
+    "Starfruit Supernova": "Звёздная сверхновая",
     "Crescendo": "Крещендо",
+    "Mirror Match": "Зеркальный матч",
+    "Overpass": "Эстакада",
+    "Underpass": "Подземный переход",
+    
+    # Зачистка (Wipeout)
+    "Acid Lakes": "Кислотные озёра",
+    "Death Landscapes": "Мёртвые ландшафты",
+    "Feast or Famine": "Пир или голод",
+    "GG Mortuary": "Морг GG",
+    "Layer Cake": "Слоёный торт",
+    "Two Thousand Lakes": "Две тысячи озёр",
+    "Dueling Beetles": "Дуэль жуков",
+    "Pinball Dreams": "Пинбольные мечты",
+    "Quintillion": "Квинтиллион",
+    "Grand Canal": "Гранд-канал",
+    
+    # Столкновение (Showdown)
+    "Stormy Plains": "Штормовые равнины",
+    "Skull Creek": "Череповой ручей",
+    "Cavern Churn": "Пещерная карусель",
+    "Rockwall Brawl": "Каменная потасовка",
+    "Training Island": "Тренировочный остров",
+    "Feast or Famine": "Пир или голод",
+    "Lonely Skies": "Одинокие небеса",
+    "Poison Lake": "Ядовитое озеро",
+    "Badlands": "Плохие земли",
+    "Desert Verticality": "Пустынная вертикальность",
+    "Island Invasion": "Островное вторжение",
+    "Mystic Thirty Three": "Мистические тридцать три",
+    "Rugged Roads": "Пересечённые дороги",
+    "Shadow Shrine": "Теневое святилище",
+    "Storm Front": "Фронт бури",
+    "Toxic River": "Токсичная река",
+    "Waste Haven": "Приют отходов",
+    "Westside Wilderness": "Западная глушь",
+    "Yggdrasil": "Иггдрасиль",
+    "Zaptrap": "Заптрап",
+    "Block Party": "Вечеринка квартала",
+    "Circle of Doom": "Круг погибели",
+    "Core Crasher": "Крушитель ядер",
+    "Dark Dunes": "Тёмные дюны",
+    "Double Swoosh": "Двойной взмах",
+    "Dread Crossing": "Страшный переход",
+    "Endless Retreat": "Бесконечное отступление",
+    "Everbush": "Вечнокустарник",
+    "Forsaken Falls": "Забытые водопады",
+    "Ghost Point": "Призрачная точка",
+    "Hazard High Voltage": "Опасность высокое напряжение",
+    "Heat Wave": "Тепловая волна",
+    "Hollow Stones": "Полые камни",
+    "Lethal Lava": "Смертельная лава",
+    "Lightning Valley": "Долина молний",
+    "Mortal Coil": "Смертельная спираль",
+    "Nimbus Nook": "Уголок нимбуса",
+    "Noxious Nexus": "Ядовитый нексус",
+    "Perilous Peaks": "Опасные пики",
+    "Pit Stop": "Пит-стоп",
+    "Plaza": "Площадь",
+    "Point of View": "Точка зрения",
+    "Ruins": "Руины",
+    "Scorched Stone": "Обожжённый камень",
+    "Snaked Grass": "Змеиная трава",
+    "Spiky Pass": "Колючий перевал",
+    "Stocky Stockades": "Частокол",
+    "Sunken Ruins": "Затонувшие руины",
+    "Tempest Tornado": "Буря торнадо",
+    "Thicket Thorns": "Чаща шипов",
+    "Treacherous Trails": "Предательские тропы",
+    "Twilight Turf": "Сумеречный дёрн",
+    "Vicious Vortex": "Порочный вихрь",
+    "Volcanic Valley": "Вулканическая долина",
+    "Windmill Fields": "Поля ветряных мельниц",
+    "Wolfpack Woods": "Леса стаи волков",
+    "Zen Garden": "Дзен-сад",
+    
+    # Дуэли (Duels)
+    "Angled Mountain": "Угловатая гора",
+    "Flaring Phoenix": "Пылающий феникс",
+    "Beautiful Garden": "Прекрасный сад",
+    "Middle Ground": "Средняя земля",
+    "Peacemaker's Rest": "Покой миротворца",
+    "Quick Draw": "Быстрая стрельба",
+    "Riverside Ring": "Прибрежное кольцо",
+    "The Last Stand": "Последний рубеж",
+    
+    # Баскетбой (Basket Brawl)
+    "Hoop Boot Hill": "Баскетбольный холм",
+    "Dunk City": "Город данка",
+    "Alley Oop": "Алей-уп",
+    "Fast Break": "Быстрый прорыв",
+    "Slam Dunk": "Слэм-данк",
+    "Three Pointer": "Трёхочковый",
+    
+    # Осада (Siege)
+    "Assembly Attack": "Атака сборки",
+    "Bot Drop": "Высадка ботов",
+    "Factory Rush": "Заводской рывок",
+    "Fort Muck": "Форт Грязь",
+    "Mechanical Mayhem": "Механический хаос",
+    "Robo Highway": "Робо-хайвей",
+    "Robot Factory": "Фабрика роботов",
+    
+    # Роборубка (Robo Rumble)
+    "Keep Safe": "Береги крепость",
+    "Last Stand": "Последний рубеж",
+    "Power Play": "Силовая игра",
+    "The Heist": "Ограбление",
+    "Defend the Vault": "Защита хранилища",
+    
+    # Битва с боссом (Boss Fight)
+    "Big Bad Boss": "Большой злой босс",
+    "Machine Zone": "Зона машин",
+    "Robot Riot": "Бунт роботов",
+    
+    # Ранговый бой (Ranked)
+    "Diamond Dome": "Алмазный купол",
+    "Glass House": "Стеклянный дом",
+    "Peak Performers": "Пиковые исполнители",
+    "Summit Showdown": "Вершинное столкновение",
+    
+    # Специальные / Сезонные карты
+    "Mirage Arena": "Арена миражей",
+    "Icy Ice Park": "Ледяной парк",
+    "Hello Always Ends With a Goodbye": "Привет всегда заканчивается прощанием",
+    "Storage Sector": "Складской сектор",
+    "Minecart Madness": "Безумие вагонетки",
+    "Gift Wrap": "Упаковка подарка",
+    "Present Pursuit": "Погоня за подарком",
+    "Holiday Party": "Праздничная вечеринка",
+    "Snowman Assault": "Атака снеговиков",
+    "Winter Festival": "Зимний фестиваль",
+    "Dragon Arena": "Арена дракона",
+    "Ninja Hideaway": "Убежище ниндзя",
+    "Samurai Smash": "Самурайский разгром",
+    "Temple of Boom": "Храм бума",
+    "Ancient Treasure": "Древнее сокровище",
+    "Blast Ball": "Взрывной мяч",
+    "Boom Town": "Город бума",
+    "Can't Touch This": "Не тронь меня",
+    "Close Call": "Близкий промах",
+    "Cold Zone": "Холодная зона",
+    "Cramped Space": "Тесное пространство",
+    "Cross Cut": "Поперечный разрез",
+    "Danger Zone": "Опасная зона",
+    "Deep End": "Глубокий конец",
+    "Double Jeopardy": "Двойная опасность",
+    "Final Frontier": "Последний рубеж",
+    "Flying Fortress": "Летающая крепость",
+    "Forest Clearing": "Лесная поляна",
+    "Frozen Peak": "Ледяной пик",
+    "Goosebumps Grove": "Роща мурашек",
+    "High Score": "Высокий счёт",
+    "Ice Blockade": "Ледяная блокада",
+    "In The Liminal": "В лиминале",
+    "Island Hopping": "Прыжки по островам",
+    "Jungle Ball": "Джунгли-бол",
+    "King of the Hill": "Король горы",
+    "Laser Tag": "Лазертаг",
+    "Lava Belt": "Лавовый пояс",
+    "Maze Mayhem": "Лабиринтный хаос",
+    "Midnight Melee": "Полуночная схватка",
+    "Monster Island": "Остров монстров",
+    "Mountain Meltdown": "Горное расплавление",
+    "Mystic Meadows": "Мистические луга",
+    "Night Market": "Ночной рынок",
+    "Ocean's Edge": "Край океана",
+    "Offbeat Oval": "Необычный овал",
+    "On A Roll": "На подъёме",
+    "Open Sky": "Открытое небо",
+    "Overgrown Ruins": "Заросшие руины",
+    "Paradise Island": "Остров рай",
+    "Party Crasher": "Праздничный нарушитель",
+    "Peacekeeper": "Миротворец",
+    "Pirate Cove": "Пиратская бухта",
+    "Playground": "Игровая площадка",
+    "Power Center": "Центр силы",
+    "Powerhouse": "Электростанция",
+    "Prison Break": "Побег из тюрьмы",
+    "Race Track": "Гоночная трасса",
+    "Rapid Rapids": "Быстрые пороги",
+    "Red Light Green Light": "Красный свет зелёный свет",
+    "Reflection": "Отражение",
+    "Retina": "Сетчатка",
+    "Riverbed": "Русло реки",
+    "Royal Flush": "Роял флеш",
+    "Sacred Sanctuary": "Священное святилище",
+    "Sandstorm": "Песчаная буря",
+    "Seaside Surprise": "Морской сюрприз",
+    "Sky Bridge": "Небесный мост",
+    "Sky Deck": "Небесная палуба",
+    "Slippery Slope": "Скользкий склон",
+    "Space Station": "Космическая станция",
+    "Speedway": "Спидвей",
+    "Spooky Town": "Жуткий город",
+    "Spring Fling": "Весеннее веселье",
+    "Stairway to Heaven": "Лестница в небо",
+    "Stand Still": "Стой спокойно",
+    "Starry Night": "Звёздная ночь",
+    "Stepping Stones": "Ступеньки",
+    "Street Brawler": "Уличный боец",
+    "Strike Out": "Забастовка",
+    "Sugar Rush": "Сахарная лихорадка",
+    "Summer Splash": "Летний всплеск",
+    "Sunrise Spring": "Весенний восход",
+    "Surprise Attack": "Внезапная атака",
+    "Sweet Dreams": "Сладкие сны",
+    "Tactical Exchange": "Тактический обмен",
+    "Tangled Roots": "Запутанные корни",
+    "Target Practice": "Стрельба по мишеням",
+    "Team Day": "Командный день",
+    "The Great Divide": "Великое разделение",
+    "The Great Outdoors": "Великие просторы",
+    "The Lab": "Лаборатория",
+    "The Ring": "Ринг",
+    "Time Travel": "Путешествие во времени",
+    "Tombstone": "Надгробие",
+    "Top to Bottom": "Сверху вниз",
+    "Tower Down": "Башня вниз",
+    "Town Hall": "Ратуша",
+    "Train Robbery": "Ограбление поезда",
+    "Treehouse Retreat": "Домик на дереве",
+    "Trench Warfare": "Окопная война",
+    "Tropical Isle": "Тропический остров",
+    "Turbo Turnpike": "Турбо магистраль",
+    "Turnaround": "Разворот",
+    "Twisted Plan": "Искривлённый план",
+    "Underground Passage": "Подземный проход",
+    "Up and Over": "Вверх и через",
+    "Urban Jungle": "Городские джунгли",
+    "Valley of Victory": "Долина победы",
+    "Victory Lane": "Аллея победы",
+    "Viking Voyage": "Викингское путешествие",
+    "Volcano Room": "Вулканическая комната",
+    "Walk of Fame": "Аллея славы",
+    "Warehouse Rampage": "Складской разгул",
+    "Water Hazard": "Водная опасность",
+    "Waterfall": "Водопад",
+    "Wave Breaker": "Волнолом",
+    "Whack-a-Mole": "Ударь крота",
+    "Wild West": "Дикий запад",
+    "Windmill Field": "Поле ветряных мельниц",
+    "Winter Party": "Зимняя вечеринка",
+    "Wizard's Valley": "Долина волшебника",
+    "X Marks the Spot": "X отмечает место",
+    "Yeti Cave": "Пещера йети",
+    "Zip Zap": "Зип-зап",
+    "Zoom Zoom": "Зум зум",
 }
 
 # ── глобальные объекты ───────────────────────────────────────────────────────
@@ -155,7 +453,7 @@ club_col: ClubCollector
 search_mode = "offline"
 SEARCH_MODE_FILE = "search_mode.txt"
 HAS_API_KEYS = True
-API_SERVER_URL = os.getenv("API_SERVER_URL", "http://130.12.46.224:8080")
+API_SERVER_URL = os.getenv("API_SERVER_URL", "http://130.12.46.224")
 API_KEY = os.getenv("API_KEY", "")
 
 def load_search_mode():
@@ -266,154 +564,7 @@ async def get_club_from_github(tag: str) -> Optional[Dict]:
         name = file_info.get("name", "")
         if name.endswith(".json") and name.replace(".json", "").upper() == tag_upper:
             return await get_github_file_content(file_info)
-    return None#!/usr/bin/env python3
-"""
-Brawl Stats CLI — интерфейс для анализа Brawl Stars.
-Навигация: ↑↓ / Tab / Shift+Tab → выбор, Enter → подтверждение, q → выход
-"""
-import sys
-import asyncio
-import json
-import os
-import time
-import threading
-import random
-import aiohttp
-from datetime import datetime, timedelta
-from typing import Optional, List, Dict, Any
-from urllib.parse import quote
-
-from rich.console import Console
-from rich.table import Table
-from rich import box
-from rich.rule import Rule
-from rich.panel import Panel
-from rich.text import Text
-from rich.progress import Progress, BarColumn, TextColumn, TimeElapsedColumn
-
-from prompt_toolkit import Application as PTApp
-from prompt_toolkit.key_binding import KeyBindings
-from prompt_toolkit.layout import Layout, HSplit, Window
-from prompt_toolkit.layout.controls import FormattedTextControl
-from prompt_toolkit.formatted_text import HTML
-from prompt_toolkit.styles import Style as PTStyle
-
-from config import API_KEYS, SEARCH_CFG, APP_CFG, SYNC_CFG, GITHUB_REPO_URL, GITHUB_TOKEN
-from database import Database
-from api_client import BrawlAPIClient
-from collectors.player_collector import PlayerCollector
-from collectors.club_collector import ClubCollector
-from utils.logger import setup_logger
-from utils.tag_generator import generate_tags
-from sync_github import GitHubSync
-
-# Проверка наличия библиотек для PNG
-PNG_AVAILABLE = False
-try:
-    import matplotlib
-    matplotlib.use('Agg')
-    import matplotlib.pyplot as plt
-    from PIL import Image
-    import io
-    PNG_AVAILABLE = True
-except ImportError:
-    pass
-
-# ── консоль ──────────────────────────────────────────────────────────────────
-console = Console(highlight=False)
-logger = setup_logger()
-
-# ── стиль ────────────────────────────────────────────────────────────────────
-PT_STYLE = PTStyle.from_dict({
-    "cursor":   "bold #f97316",
-    "selected": "bold #ffffff",
-    "item":     "#d1d5db",
-    "dim":      "#4b5563",
-    "prompt":   "bold #f97316",
-    "text":     "#ffffff",
-})
-
-# ── названия режимов ────────────────────────────────────────────────────────
-MODE_NAMES = {
-    "soloShowdown": "🌵 Столкновение (соло)",
-    "duoShowdown":  "👥 Столкновение (дуо)",
-    "brawlBall":    "⚽ Броулбол",
-    "knockout":     "🥊 Нокаут",
-    "heist":        "💰 Ограбление",
-    "hotZone":      "🔥 Горячая зона",
-    "bounty":       "🏆 Охота",
-    "gemGrab":      "💎 Захват кристаллов",
-    "duels":        "⚔️ Дуэли",
-    "wipeout":      "🧹 Зачистка",
-    "basketBrawl":  "🏀 Баскетбой",
-    "roboRumble":   "🤖 Вторжение роботов",
-    "bossFight":    "👾 Битва с боссом",
-    "bigGame":      "🐘 Большая игра",
-    "siege":        "🏰 Осада",
-    "trioShowdown": "👥 Столкновение (трио)",
-    "wipeout5V5":   "🧹 Зачистка 5x5",
-    "knockout5V5":  "🥊 Нокаут 5x5",
-    "ranked":       "🏆 Ранговый режим",
-    "special":      "✨ Особое событие",
-    "unknown":      "❓ Неизвестный режим",
-}
-
-MAP_TRANSLATIONS = {
-    "Hard Rock Mine": "Хард-рок шахта",
-    "Mushroom Meadow": "Грибная лощина",
-    "Minecart Madness": "Вагонетка без тормозов",
-    "Deathcap Trap": "Смертельная ловушка",
-    "Double Swoosh": "Двойной изгиб",
-    "Angled Mountain": "Угловатая гора",
-    "Crystal Cavern": "Кристальная пещера",
-    "Deep Hollows": "Подземные пустоты",
-    "Triple Dribble": "Трипл-дриблинг",
-    "Center Stage": "Центровая площадка",
-    "Super Beach": "Суперпляж",
-    "Sunny Soccer": "Солнечный футбол",
-    "Pinhole Punt": "Щелевой удар",
-    "Snake Prairie": "Змеиные поля",
-    "Goalkeeper's Dream": "Мечта вратаря",
-    "Pinball Dreams": "Пинбол мечты",
-    "Feast or Famine": "Всё или ничего",
-    "Cavern Churn": "Штольня",
-    "Double Trouble": "Двойные озера",
-    "Death Landscapes": "Озеро мертвецов",
-    "Two Thousand Lakes": "Две тысячи озёр",
-    "Acid Lakes": "Кислотные озёра",
-    "Woodland Lilies": "Лесные лилии",
-    "Lotus": "Лотос",
-    "Starfruit Supernova": "Звёздная сверхновая",
-    "Out in the Open": "В чистом поле",
-    "Goldarm Gulch": "Ущелье Золотого Дракона",
-    "Belle's Rock": "Скала Белль",
-    "New Horizon": "Новый горизонт",
-    "Beautiful Garden": "Прекрасный сад",
-    "Flaring Phoenix": "Пылающий феникс",
-    "Hot Potato": "Горячая кукуруза",
-    "Safe Zone": "Керки в кустах",
-    "Bridge Too Far": "Поворот на мосту",
-    "GG Mortuary": "Морг Мортиса",
-    "Bridge Spam": "Взятие моста",
-    "Quintillion": "Квинтиллион",
-    "Ring of Fire": "Огненное кольцо",
-    "Parallel Plays": "Параллельная игра",
-    "Open Zone": "Открытая зона",
-    "Dueling Beetles": "Дуэльные жуки",
-    "Layer Cake": "Кремовый торт",
-    "Snake Prairie": "Змеиные степи",
-    "Grand Canal": "Гранд-канал",
-    "Shooting Star": "Падающая звезда",
-    "Storage Sector": "Складской сектор",
-    "Hoop Boot Hill": "Баскетбольный холм",
-    "Jumpscare Lair": "Логово страха",
-    "Hideout": "Убежище",
-    "H is for Holiday": "H как праздник",
-    "Mirage Arena": "Арена миражей",
-    "Icy ice park": "Ледяной парк",
-    "Hello Always Ends With a Goodbye": "Привет всегда заканчивается прощанием",
-    "Crescendo": "Крещендо",
-}
+    return None
 
 # ── глобальные объекты ───────────────────────────────────────────────────────
 db: Database
@@ -423,7 +574,6 @@ club_col: ClubCollector
 search_mode = "offline"
 SEARCH_MODE_FILE = "search_mode.txt"
 HAS_API_KEYS = True
-API_SERVER_URL = os.getenv("API_SERVER_URL", "http://130.12.46.224:8080")
 API_KEY = os.getenv("API_KEY", "")
 
 def load_search_mode():
@@ -605,7 +755,7 @@ async def _add_rating_remote(action_type: str, object_id: Optional[str] = None):
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 f"{API_SERVER_URL}/rating/add",
-                params={"api_key": API_KEY},
+                headers={"X-API-Key": API_KEY},
                 json={"action_type": action_type, "object_id": object_id}
             ) as resp:
                 if resp.status != 200:
@@ -620,7 +770,7 @@ async def _get_rating_remote() -> int:
         async with aiohttp.ClientSession() as session:
             async with session.get(
                 f"{API_SERVER_URL}/rating/my",
-                params={"api_key": API_KEY}
+                headers={"X-API-Key": API_KEY}
             ) as resp:
                 if resp.status == 200:
                     data = await resp.json()
@@ -638,7 +788,7 @@ async def _ensure_api_key():
             async with aiohttp.ClientSession() as session:
                 async with session.get(
                     f"{API_SERVER_URL}/rating/my",
-                    params={"api_key": API_KEY}
+                    headers={"X-API-Key": API_KEY}
                 ) as resp:
                     if resp.status == 200:
                         return  # ключ рабочий
@@ -653,7 +803,8 @@ async def _ensure_api_key():
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 f"{API_SERVER_URL}/generate_key",
-                params={"name": "CLI_User", "daily_limit": 1000}
+                headers={"Content-Type": "application/json"},
+                json={"name": "CLI_User", "daily_limit": 1000}
             ) as resp:
                 if resp.status == 200:
                     data = await resp.json()
@@ -1255,7 +1406,9 @@ MENU_ITEMS = [
     ("check_keys",   "🔑 Проверить API ключи"),
     ("enter_api_key","🔑 Ввести API-ключ"),
     ("set_mode",     "🌐 Режим поиска (офлайн/онлайн)"),
-    ("gen_codes",    "🔑 Генерация случайных кодов (тегов)"),
+    ("gen_codes",    "🔑 Генерация кодов командной игры"),
+    ("list_codes",   "📋 Показать коды из базы"),
+    ("cleanup_codes","🧹 Очистить истёкшие коды"),
     ("fill_db",      "📥 Заполнить базу данных (однократно)"),
     ("continuous_fill", "🔄 Непрерывное заполнение БД"),
     ("sync_push",    "⬆️ Выгрузить данные в GitHub"),
@@ -1380,7 +1533,7 @@ async def _ensure_api_key():
             async with aiohttp.ClientSession() as session:
                 async with session.get(
                     f"{API_SERVER_URL}/rating/my",
-                    params={"api_key": API_KEY}
+                    headers={"X-API-Key": API_KEY}
                 ) as resp:
                     if resp.status == 200:
                         return  # ключ рабочий
@@ -1395,7 +1548,8 @@ async def _ensure_api_key():
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 f"{API_SERVER_URL}/generate_key",
-                params={"name": "CLI_User", "daily_limit": 1000}
+                headers={"Content-Type": "application/json"},
+                json={"name": "CLI_User", "daily_limit": 1000}
             ) as resp:
                 if resp.status == 200:
                     data = await resp.json()
@@ -2288,25 +2442,250 @@ async def check_active_players_from_file(file_path: str, days_threshold: int = 9
 
 
 async def generate_command_codes():
+    """
+    Генерация кодов командной игры (Party Team Codes) для Brawl Stars.
+    
+    Формат кодов согласно документации:
+    - Префикс: "XM" (2 заглавные буквы)
+    - Основная часть: 5-7 символов (цифры 0-9 и заглавные буквы A-Z, кроме I и O)
+    - Общая длина: 7-9 символов
+    
+    Валидные символы: 0123456789ABCDEFGHJKLMNPQRSTUVWXYZ (25 символов)
+    Исключены I и O для избежания путаницы с 1 и 0
+    
+    Коды сохраняются в базу данных и удаленное хранилище (BrawlNest/brawl_data).
+    """
     count = await _ask_int("Количество кодов", 100)
-    length = await _ask_int("Длина кода (обычно 7-8 символов)", 8)
+    code_length = await _ask_int("Длина кода (7, 8 или 9 символов)", 7)
     output_file = await _ask("Имя выходного файла", "game_codes.txt")
     if not output_file:
         output_file = "game_codes.txt"
-
+    
+    # Валидные символы для кодов (Base25 без I и O)
     valid_chars = "0123456789ABCDEFGHJKLMNPQRSTUVWXYZ"
-    codes = []
-    for _ in range(count):
-        code = ''.join(random.choices(valid_chars, k=length))
-        codes.append(code)
-
+    
+    # Префикс XM обязателен
+    prefix = "XM"
+    
+    # Проверяем длину кода (поддерживаем 7-9 символов)
+    if code_length < 7:
+        code_length = 7
+    elif code_length > 9:
+        code_length = 9
+    
+    # Длина основной части (без префикса)
+    main_length = code_length - len(prefix)
+    
+    codes = set()  # Используем set для уникальности
+    attempts = 0
+    max_attempts = count * 10  # Защита от бесконечного цикла
+    
+    # Время истечения (10 часов)
+    expires_at = (datetime.utcnow() + timedelta(hours=10)).isoformat()
+    
+    with console.status("[dim]Генерация кодов...[/dim]", spinner="dots"):
+        while len(codes) < count and attempts < max_attempts:
+            # Генерируем основную часть кода
+            main_part = ''.join(random.choices(valid_chars, k=main_length))
+            code = prefix + main_part
+            codes.add(code)
+            attempts += 1
+    
+    # Конвертируем в список и сортируем
+    codes_list = sorted(list(codes))
+    
+    # Создаем данные для сохранения
+    codes_data = {
+        "codes": codes_list,
+        "generated_at": datetime.utcnow().isoformat(),
+        "code_length": code_length,
+        "expires_in_hours": 10,
+        "total_count": len(codes_list)
+    }
+    
+    # Сохраняем в базу данных
+    db = Database()
+    await db.connect()
+    try:
+        for code in codes_list:
+            await db.save_team_code(code, expires_at)
+        _ok(f"Сохранено {len(codes_list)} кодов в базу данных")
+        
+        # Синхронизация с удалённым хранилищем
+        with console.status("[dim]Синхронизация с BrawlNest...[/dim]", spinner="dots"):
+            # Получаем все коды из БД для синхронизации
+            all_codes = await db.get_all_valid_team_codes(limit=1000)
+            db.sync_codes_to_remote(all_codes)
+    finally:
+        await db.close()
+    
+    # Записываем в локальный файл для удобства
     with open(output_file, "w") as f:
-        for code in codes:
+        for code in codes_list:
             f.write(f"{code}\n")
-
-    _ok(f"Сгенерировано {count} кодов длиной {length} → {output_file}")
+    
+    _ok(f"Сгенерировано {len(codes_list)} уникальных кодов длиной {code_length}")
+    _ok(f"Экспортировано в файл: {output_file}")
+    
+    # Показываем примеры
+    console.print("\n[bold #f97316]Примеры сгенерированных кодов:[/bold #f97316]")
+    examples = codes_list[:min(10, len(codes_list))]
+    for i, code in enumerate(examples, 1):
+        console.print(f"  {i}. [bold #22c55e]{code}[/bold #22c55e]")
+    if len(codes_list) > 10:
+        console.print(f"  ... и ещё {len(codes_list) - 10} кодов в файле")
+    
+    console.print("\n[dim]💡 Коды действительны в течение 10 часов с момента генерации.[/dim]")
     console.print()
+    
     await _add_rating_remote("generate_codes")
+
+
+async def list_team_codes():
+    """
+    Просмотр всех действительных кодов командной игры из удаленного хранилища.
+    """
+    with console.status("[dim]Загрузка кодов из удаленного хранилища...[/dim]", spinner="dots"):
+        codes_data = remote_storage.get_all_data("codes")
+    
+    if not codes_data:
+        _err("Нет кодов в удаленном хранилище.")
+        console.print("\n[dim]Совет: используйте команду 'gen_codes' для генерации новых кодов.[/dim]")
+        return
+    
+    # Собираем все коды из разных файлов
+    all_codes = []
+    for filename, data in codes_data.items():
+        if isinstance(data, dict) and "codes" in data:
+            codes_list = data.get("codes", [])
+            generated_at = data.get("generated_at", "")
+            expires_in = data.get("expires_in_hours", 10)
+            
+            # Вычисляем время истечения
+            if generated_at:
+                try:
+                    gen_dt = datetime.fromisoformat(generated_at.replace('Z', '+00:00'))
+                    expires_dt = gen_dt + timedelta(hours=expires_in)
+                    now = datetime.now(gen_dt.tzinfo) if gen_dt.tzinfo else datetime.utcnow()
+                    
+                    # Фильтруем только действительные коды
+                    if expires_dt > now:
+                        for code in codes_list:
+                            all_codes.append({
+                                "code": code,
+                                "created": gen_dt.strftime("%d.%m %H:%M"),
+                                "expires": expires_dt.strftime("%d.%m %H:%M"),
+                                "source": filename
+                            })
+                except Exception as e:
+                    # Если ошибка парсинга даты, добавляем без проверки
+                    for code in codes_list:
+                        all_codes.append({
+                            "code": code,
+                            "created": generated_at[:16] if generated_at else "?",
+                            "expires": "?",
+                            "source": filename
+                        })
+            else:
+                for code in codes_list:
+                    all_codes.append({
+                        "code": code,
+                        "created": "?",
+                        "expires": "?",
+                        "source": filename
+                    })
+    
+    if not all_codes:
+        _err("Нет действительных кодов (все истекли).")
+        console.print("\n[dim]Совет: используйте команду 'gen_codes' для генерации новых кодов.[/dim]")
+        return
+    
+    console.print(f"\n[bold #f97316]Действительные коды командной игры ({len(all_codes)} шт.):[/bold #f97316]\n")
+    
+    # Группируем по длине
+    codes_by_length = {}
+    for item in all_codes:
+        code = item["code"]
+        length = len(code)
+        if length not in codes_by_length:
+            codes_by_length[length] = []
+        codes_by_length[length].append(item)
+    
+    for length in sorted(codes_by_length.keys()):
+        console.print(f"[bold]Коды длиной {length} символов:[/bold]")
+        table = Table(box=box.SIMPLE, show_header=True, header_style="bold dim")
+        table.add_column("#", style="dim", width=3)
+        table.add_column("Код", style="#22c55e", width=12)
+        table.add_column("Создан", style="dim", width=10)
+        table.add_column("Истекает", style="yellow", width=10)
+        
+        for i, item in enumerate(codes_by_length[length], 1):
+            table.add_row(
+                str(i),
+                item["code"],
+                item["created"],
+                item["expires"]
+            )
+        
+        console.print(table)
+        console.print()
+    
+    # Статистика
+    total = len(all_codes)
+    console.print(f"[dim]Всего действительных кодов: {total}[/dim]")
+    
+    await _add_rating_remote("list_codes")
+
+
+async def cleanup_expired_codes_cmd():
+    """
+    Очистка истёкших кодов из удаленного хранилища.
+    Примечание: это локальная операция, файлы в Git не удаляются автоматически.
+    """
+    with console.status("[dim]Проверка кодов на истечение...[/dim]", spinner="dots"):
+        codes_data = remote_storage.get_all_data("codes")
+    
+    if not codes_data:
+        _info("Нет кодов для очистки.")
+        return
+    
+    expired_count = 0
+    valid_count = 0
+    
+    now = datetime.utcnow()
+    
+    for filename, data in codes_data.items():
+        if isinstance(data, dict) and "generated_at" in data:
+            generated_at = data.get("generated_at", "")
+            expires_in = data.get("expires_in_hours", 10)
+            
+            if generated_at:
+                try:
+                    gen_dt = datetime.fromisoformat(generated_at.replace('Z', '+00:00'))
+                    expires_dt = gen_dt + timedelta(hours=expires_in)
+                    
+                    if expires_dt < now:
+                        expired_count += len(data.get("codes", []))
+                        # Помечаем файл как устаревший (можно добавить удаление)
+                        console.print(f"[dim]  Истёк: {filename} ({len(data.get('codes', []))} кодов)[/dim]")
+                    else:
+                        valid_count += len(data.get("codes", []))
+                except:
+                    valid_count += len(data.get("codes", []))
+            else:
+                valid_count += len(data.get("codes", []))
+    
+    if expired_count > 0:
+        console.print(f"\n[yellow]⚠️ Найдено {expired_count} истёкших кодов в {len(codes_data)} файлах.[/yellow]")
+        console.print("[dim]Примечание: Автоматическое удаление файлов из Git не выполняется.[/dim]")
+        console.print("[dim]Для удаления используйте команду 'git rm' вручную или очистите папку .brawlnest_data/data/codes[/dim]")
+    else:
+        _ok("Истёкших кодов не найдено.")
+    
+    _ok(f"Действительных кодов: {valid_count}")
+    console.print()
+    
+    await _add_rating_remote("cleanup_codes")
 
 
 async def check_club_by_tag(tag: str):
@@ -2960,6 +3339,12 @@ async def interactive_menu():
         elif choice == "gen_codes":
             await generate_command_codes()
 
+        elif choice == "list_codes":
+            await list_team_codes()
+
+        elif choice == "cleanup_codes":
+            await cleanup_expired_codes_cmd()
+
         elif choice == "check_club":
             tag = await _ask("Тег клуба (без #)")
             if tag:
@@ -3045,6 +3430,10 @@ async def main():
             await show_random_existing_player()
         elif cmd == "gen_codes":
             await generate_command_codes()
+        elif cmd == "list_codes":
+            await list_team_codes()
+        elif cmd == "cleanup_codes":
+            await cleanup_expired_codes_cmd()
         elif cmd == "check_club" and len(sys.argv) > 2:
             await check_club_by_tag(sys.argv[2])
         elif cmd == "search_clubs":
@@ -3088,7 +3477,7 @@ async def main():
             console.print(
                 "  Использование: python cli.py "
                 "[player|battles|club|fullclub|search|checkfile|checkfile_active|randomplayer|gen_codes"
-                "|check_club|search_clubs|search_club_name|check_team|brawlers|rotation|rankplayers|rankclubs|locations|powerplay|checkkeys|enter_api_key|set_mode|fill_db|continuous_fill|syncpush|syncpull|rating] [аргументы]\n"
+                "|list_codes|cleanup_codes|check_club|search_clubs|search_club_name|check_team|brawlers|rotation|rankplayers|rankclubs|locations|powerplay|checkkeys|enter_api_key|set_mode|fill_db|continuous_fill|syncpush|syncpull|rating] [аргументы]\n"
                 "  Без аргументов — интерактивное меню"
             )
     else:
