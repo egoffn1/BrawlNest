@@ -267,6 +267,7 @@ def _kv(key: str, val: str, ks: str = "dim", vs: str = "white"):
 def _ok(msg: str):  console.print(f"  [bold #22c55e]✓[/bold #22c55e]  {msg}")
 def _err(msg: str): console.print(f"  [bold #ef4444]✗[/bold #ef4444]  {msg}")
 def _info(msg: str): console.print(f"  [dim #9ca3af]{msg}[/dim #9ca3af]")
+def _warn(msg: str): console.print(f"  [bold #f59e0b]⚠[/bold #f59e0b]  {msg}")
 
 async def _press_enter_to_continue():
     """Показать подсказку и ждать нажатия Enter."""
@@ -344,6 +345,7 @@ async def ensure_api_key():
                     if resp.status == 200:
                         data = await resp.json()
                         if data and data.get("valid"):
+                            _ok(f"API ключ действителен (лимит: {data.get('daily_limit', 'N/A')})")
                             return  # ключ рабочий
         except Exception:
             pass
@@ -352,24 +354,43 @@ async def ensure_api_key():
         _info("API ключ недействителен.")
         API_KEY = ""  # сбросим
     
-    # Проверяем доступность сервера
+    # Проверяем доступность сервера через /health
     console.print()
     _info(f"Подключение к BrawlNest API: {BASE_URL}")
     server_available = False
+    server_ready = False
     try:
         async with aiohttp.ClientSession() as sess:
+            # Проверка базовой доступности
             async with sess.get(
                 f"{BASE_URL}/health",
                 timeout=aiohttp.ClientTimeout(total=5)
             ) as resp:
                 if resp.status == 200:
                     server_available = True
-                    _ok("Сервер BrawlNest доступен")
+                    _ok("Сервер BrawlNest доступен (/health)")
+            
+            # Проверка готовности (Redis, БД)
+            async with sess.get(
+                f"{BASE_URL}/ready",
+                timeout=aiohttp.ClientTimeout(total=5)
+            ) as resp:
+                if resp.status == 200:
+                    server_ready = True
+                    _ok("Сервер готов к работе (/ready)")
+                else:
+                    try:
+                        detail = await resp.json()
+                        _warn(f"Сервер не полностью готов: {detail.get('detail', 'Unknown')}")
+                    except:
+                        _warn("Сервер не полностью готов (проблемы с Redis/БД)")
     except Exception as e:
-        _err(f"Сервер BrawlNest недоступен: {e}")
+        _err(f"Ошибка подключения к серверу: {e}")
     
     if not server_available:
         _err("Сервер BrawlNest недоступен. Некоторые функции будут ограничены.")
+    elif not server_ready:
+        _warn("Сервер работает, но некоторые функции могут быть недоступны из-за проблем с БД/Redis")
     
     # Предлагаем ввести ключ вручную
     console.print()
