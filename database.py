@@ -497,3 +497,143 @@ class Database:
         """, (code, now)) as cur:
             row = await cur.fetchone()
         return row is not None
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Notifications - таблица уведомлений
+    # ─────────────────────────────────────────────────────────────────────────
+    
+    async def init_notifications_table(self):
+        """Создаёт таблицу уведомлений если её нет."""
+        conn = await self._conn_or_raise()
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS notifications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                message TEXT NOT NULL,
+                data TEXT,
+                priority TEXT DEFAULT 'normal',
+                created_at TEXT NOT NULL,
+                is_read INTEGER DEFAULT 0
+            )
+        """)
+        await conn.create_index(
+            "idx_notifications_user_created",
+            "notifications",
+            "user_id, created_at DESC",
+            if_not_exists=True
+        )
+        await conn.commit()
+
+    async def save_notification(self, notification: Dict):
+        """Сохранить уведомление в БД."""
+        conn = await self._conn_or_raise()
+        await conn.execute("""
+            INSERT INTO notifications (
+                user_id, type, title, message, data, priority, created_at, is_read
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            notification["user_id"],
+            notification["type"],
+            notification["title"],
+            notification["message"],
+            str(notification.get("data", {})),
+            notification["priority"],
+            notification["created_at"],
+            1 if notification.get("is_read") else 0
+        ))
+        await conn.commit()
+
+    async def get_user_notifications(
+        self, user_id: str, limit: int = 50, unread_only: bool = False
+    ) -> List[Dict]:
+        """Получить уведомления пользователя."""
+        conn = await self._conn_or_raise()
+        query = "SELECT * FROM notifications WHERE user_id=?"
+        params: List[Any] = [user_id]
+        
+        if unread_only:
+            query += " AND is_read=0"
+        
+        query += " ORDER BY created_at DESC LIMIT ?"
+        params.append(limit)
+        
+        async with conn.execute(query, tuple(params)) as cur:
+            rows = await cur.fetchall()
+        
+        return [dict(r) for r in rows]
+
+    async def mark_notification_read(self, user_id: str, notification_id: str):
+        """Отметить уведомление как прочитанное."""
+        conn = await self._conn_or_raise()
+        await conn.execute("""
+            UPDATE notifications SET is_read=1 WHERE user_id=? AND id=?
+        """, (user_id, notification_id))
+        await conn.commit()
+
+    async def mark_all_notifications_read(self, user_id: str):
+        """Отметить все уведомления как прочитанные."""
+        conn = await self._conn_or_raise()
+        await conn.execute("""
+            UPDATE notifications SET is_read=1 WHERE user_id=?
+        """, (user_id,))
+        await conn.commit()
+
+    async def cleanup_old_notifications(self, cutoff_date: str) -> int:
+        """Удалить старые уведомления. Возвращает количество удалённых."""
+        conn = await self._conn_or_raise()
+        cursor = await conn.execute("""
+            DELETE FROM notifications WHERE created_at < ?
+        """, (cutoff_date,))
+        await conn.commit()
+        return cursor.rowcount
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # API Keys - управление ключами API
+    # ─────────────────────────────────────────────────────────────────────────
+    
+    async def generate_api_key(self, name: str, daily_limit: int = 10000) -> str:
+        """Генерирует новый API ключ."""
+        import secrets
+        key = f"bn_{secrets.token_urlsafe(24)}"
+        now = datetime.now(timezone.utc).isoformat()
+        
+        conn = await self._conn_or_raise()
+        await conn.execute("""
+            INSERT INTO api_keys (key, name, daily_limit, created_at)
+            VALUES (?, ?, ?, ?)
+        """, (key, name, daily_limit, now))
+        await conn.commit()
+        
+        return key
+
+    async def get_api_key_info(self, key: str) -> Optional[Dict]:
+        """Получает информацию об API ключе."""
+        conn = await self._conn_or_raise()
+        async with conn.execute(
+            "SELECT * FROM api_keys WHERE key = ?", (key,)
+        ) as cur:
+            row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def get_usage_today(self, key: str) -> int:
+        """Возвращает количество запросов сегодня."""
+        conn = await self._conn_or_raise()
+        today = datetime.now(timezone.utc).date().isoformat()
+        async with conn.execute("""
+            SELECT COUNT(*) FROM api_usage 
+            WHERE api_key = ? AND date(timestamp) = ?
+        """, (key, today)) as cur:
+            row = await cur.fetchone()
+        return row[0] if row else 0
+
+    async def log_api_usage(self, key: str, endpoint: str, response_time_ms: float = 0):
+        """Логирует использование API ключа."""
+        conn = await self._conn_or_raise()
+        now = datetime.now(timezone.utc).isoformat()
+        await conn.execute("""
+            INSERT INTO api_usage (api_key, endpoint, timestamp, response_time_ms)
+            VALUES (?, ?, ?, ?)
+        """, (key, endpoint, now, response_time_ms))
+        await conn.commit()
