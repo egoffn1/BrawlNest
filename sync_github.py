@@ -116,21 +116,59 @@ class GitHubSync:
                 )
                 
                 if remote_branch_exists:
-                    # Создаем локальную ветку из удаленной
-                    self.repo.git.checkout('-b', self.branch, f'origin/{self.branch}')
-                    logger.info(f"Checked out remote branch {self.branch}")
+                    # Сначала сохраняем непротракенные файлы во временную папку
+                    untracked_files = []
+                    for item in self.repo.untracked_files:
+                        item_path = Path(item)
+                        if item_path.exists():
+                            untracked_files.append(item)
+                    
+                    temp_dir = Path(".git_temp_backup")
+                    temp_dir.mkdir(exist_ok=True)
+                    
+                    # Копируем конфликтующие файлы во временную папку
+                    for file in untracked_files:
+                        src = Path(file)
+                        dst = temp_dir / src.name
+                        if src.exists():
+                            import shutil
+                            shutil.copy2(src, dst)
+                            logger.debug(f"Backed up {file} to {temp_dir}")
+                    
+                    # Создаем локальную ветку из удаленной с force
+                    self.repo.git.checkout('-f', '-b', self.branch, f'origin/{self.branch}')
+                    logger.info(f"Checked out remote branch {self.branch} (force)")
+                    
+                    # Восстанавливаем файлы обратно если они нужны
+                    for file in untracked_files:
+                        dst = temp_dir / Path(file).name
+                        if dst.exists():
+                            import shutil
+                            src_path = self.local_path / Path(file).name
+                            shutil.copy2(dst, src_path)
+                            logger.debug(f"Restored {file}")
+                    
+                    # Очищаем временную папку
+                    if temp_dir.exists():
+                        import shutil
+                        shutil.rmtree(temp_dir)
+                        
                 else:
                     # Создаем новую ветку
                     self.repo.git.checkout('-b', self.branch)
                     logger.info(f"Created new branch {self.branch}")
             except GitCommandError as e:
                 logger.warning(f"Could not checkout branch {self.branch}: {e}")
-                # Создаем ветку если не удалось получить с remote
-                if self.branch not in [b.name for b in self.repo.branches]:
-                    self.repo.git.checkout('-b', self.branch)
+                # Пробуем force checkout если обычная не сработала
+                try:
+                    self.repo.git.checkout('-f', '-b', self.branch)
+                    logger.info(f"Created new branch {self.branch} (force)")
+                except GitCommandError as e2:
+                    logger.error(f"Force checkout also failed: {e2}")
+                    raise
         else:
-            # Ветка существует локально - переключаемся
-            self.repo.git.checkout(self.branch)
+            # Ветка существует локально - переключаемся с force для игнорирования конфликтов
+            self.repo.git.checkout('-f', self.branch)
             
         logger.info(f"Current branch: {self.repo.active_branch.name}")
 
