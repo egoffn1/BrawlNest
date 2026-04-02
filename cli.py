@@ -1256,17 +1256,32 @@ async def show_locations():
 # ═══════════════════════════════════════════════════════════════════
 
 async def generate_team_code():
+    """Генерация кода команды через BrawlNest API с резервным локальным генератором."""
     duration = await _ask_int("Время жизни кода в секундах (10-300)", 120)
     duration = max(10, min(300, duration))
+    
+    # Пытаемся получить код через серверное API
     data = await _nest_post("/generate_team_code", {"duration_seconds": duration})
+    
     if not data or not data.get("code"):
-        _err("Не удалось сгенерировать код (API недоступен)")
-        await _press_enter_to_continue()
-        return
+        # Резервный вариант: локальная генерация
+        _warn("Серверная генерация недоступна, используем локальный генератор...")
+        code = generate_brawl_code(length=7)
+        expires_at = datetime.now(timezone.utc) + timedelta(seconds=duration)
+        data = {
+            "code": code,
+            "expires_at": expires_at.isoformat(),
+            "duration_seconds": duration,
+            "local": True
+        }
+    
     console.print()
     _hr("🔑 Код команды создан")
-    _kv("Код",        f"[bold #facc15]{data['code']}[/bold #facc15]", "dim", "#facc15")
-    _kv("Истекает",   str(data.get("expires_at","?"))[:19])
+    if data.get("local"):
+        _kv("Код", f"[bold #facc15]{data['code']}[/bold #facc15] [dim](локальный)[/dim]", "dim", "#facc15")
+    else:
+        _kv("Код", f"[bold #facc15]{data['code']}[/bold #facc15]", "dim", "#facc15")
+    _kv("Истекает", str(data.get("expires_at","?"))[:19])
     _kv("Длительность", f"{duration} сек")
     _hr()
     console.print()
