@@ -342,36 +342,36 @@ async def ensure_api_key():
                     timeout=aiohttp.ClientTimeout(total=5)
                 ) as resp:
                     if resp.status == 200:
-                        return  # ключ рабочий
+                        data = await resp.json()
+                        if data and data.get("valid"):
+                            return  # ключ рабочий
         except Exception:
             pass
         # ключ невалидный – продолжаем как при отсутствии
         console.print()
-        _info("API ключ устарел, генерируем новый...")
-        API_KEY = ""  # сбросим, чтобы перегенерировать
-
-    # Если ключа нет – пытаемся сгенерировать
+        _info("API ключ недействителен.")
+        API_KEY = ""  # сбросим
+    
+    # Проверяем доступность сервера
     console.print()
     _info(f"Подключение к BrawlNest API: {BASE_URL}")
+    server_available = False
     try:
         async with aiohttp.ClientSession() as sess:
-            async with sess.post(
-                f"{BASE_URL}/generate_key",
-                json={"name": "CLI_User", "daily_limit": 10000},
-                timeout=aiohttp.ClientTimeout(total=10)
+            async with sess.get(
+                f"{BASE_URL}/health",
+                timeout=aiohttp.ClientTimeout(total=5)
             ) as resp:
                 if resp.status == 200:
-                    data = await resp.json()
-                    key = data.get("key", "")
-                    if key:
-                        _save_env_key(key)
-                        _ok(f"API ключ создан и сохранён в .env")
-                        return
-        _err("Сервер BrawlNest недоступен. Некоторые функции будут ограничены.")
+                    server_available = True
+                    _ok("Сервер BrawlNest доступен")
     except Exception as e:
-        _err(f"Не удалось подключиться к {BASE_URL}: {e}")
-
-    # Если генерация не удалась, предлагаем ввести вручную
+        _err(f"Сервер BrawlNest недоступен: {e}")
+    
+    if not server_available:
+        _err("Сервер BrawlNest недоступен. Некоторые функции будут ограничены.")
+    
+    # Предлагаем ввести ключ вручную
     console.print()
     choice = await _ask("Введите API-ключ вручную (или Enter чтобы пропустить)", "")
     if choice:
@@ -1280,7 +1280,7 @@ def generate_brawl_code(length: int = 7) -> str:
     random_part = ''.join(random.choices(BASE25_CHARS, k=length))
     return f"XM{random_part}"
 
-async def generate_team_codes_cli(count: int = None):
+async def generate_team_codes_cli(count: Optional[int] = None):
     """CLI команда для генерации кодов команды с сохранением в БД и Git."""
     from database import Database
     
